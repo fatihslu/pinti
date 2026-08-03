@@ -40,15 +40,88 @@ def rows(sql, args=()):
         return [dict(row) for row in connection.execute(sql, args).fetchall()]
 
 
-def ensure_alerts_table():
+def ensure_schema():
+    """Create the local snapshot store on a fresh PythonAnywhere deployment.
+
+    `price_tracker.db` is deliberately ignored by Git, so a freshly cloned
+    application has no tables.  The Flask read endpoints must still return an
+    empty JSON collection until the first scan has populated the database.
+    """
     with db() as connection:
-        connection.execute("""CREATE TABLE IF NOT EXISTS product_alerts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, source TEXT NOT NULL,
-            category_name TEXT, title TEXT NOT NULL, product_url TEXT NOT NULL,
-            base_price REAL NOT NULL, target_price REAL, discount_percent REAL,
-            email TEXT NOT NULL, last_price REAL, last_notified_price REAL,
-            active INTEGER NOT NULL DEFAULT 1, created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                last_checked DATETIME)""")
+        connection.executescript("""
+            CREATE TABLE IF NOT EXISTS amazon_bestseller_snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                batch_id TEXT NOT NULL,
+                rank INTEGER NOT NULL,
+                title TEXT NOT NULL,
+                price REAL NOT NULL,
+                category_id TEXT NOT NULL DEFAULT 'featured',
+                category_name TEXT NOT NULL DEFAULT 'Öne Çıkan Ürünler',
+                product_url TEXT NOT NULL,
+                image_url TEXT,
+                captured_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS amazon_low_price_snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                batch_id TEXT NOT NULL,
+                category_id TEXT NOT NULL,
+                category_name TEXT NOT NULL,
+                low_price_period INTEGER NOT NULL,
+                asin TEXT NOT NULL,
+                position INTEGER NOT NULL,
+                title TEXT NOT NULL,
+                price REAL NOT NULL,
+                original_price REAL,
+                discount_percent INTEGER NOT NULL DEFAULT 0,
+                monthly_sales_minimum INTEGER,
+                monthly_sales_text TEXT,
+                review_count INTEGER,
+                rating REAL,
+                product_url TEXT NOT NULL,
+                image_url TEXT,
+                captured_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS amazon_review_radar_snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                batch_id TEXT NOT NULL,
+                asin TEXT NOT NULL,
+                title TEXT NOT NULL,
+                price REAL,
+                category_id TEXT NOT NULL DEFAULT 'featured',
+                category_name TEXT NOT NULL DEFAULT 'Öne Çıkan Ürünler',
+                rating REAL NOT NULL DEFAULT 0,
+                review_count INTEGER NOT NULL DEFAULT 0,
+                image_url TEXT,
+                product_url TEXT NOT NULL,
+                captured_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS product_alerts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source TEXT NOT NULL,
+                category_name TEXT,
+                title TEXT NOT NULL,
+                product_url TEXT NOT NULL,
+                base_price REAL NOT NULL,
+                target_price REAL,
+                discount_percent REAL,
+                email TEXT NOT NULL,
+                last_price REAL,
+                last_notified_price REAL,
+                active INTEGER NOT NULL DEFAULT 1,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                last_checked DATETIME
+            );
+        """)
+
+
+def ensure_alerts_table():
+    ensure_schema()
+
+
+ensure_schema()
 
 
 def logged_in():
@@ -64,6 +137,14 @@ def protect_application():
     if request.path.startswith("/api/"):
         return jsonify(error="Oturum açmalısın."), 401
     return redirect(url_for("login"))
+
+
+@app.errorhandler(sqlite3.Error)
+def database_error(error):
+    """API clients must never receive Flask's HTML error document as JSON."""
+    if request.path.startswith("/api/"):
+        return jsonify(error=f"Veritabanı hatası: {error}"), 500
+    raise error
 
 
 def login_required(view):
@@ -137,7 +218,16 @@ def review_radar():
 @app.get("/api/amazon/low-prices/categories")
 @login_required
 def low_price_categories():
-    return jsonify(rows("SELECT DISTINCT category_id AS id, category_name AS name FROM amazon_low_price_snapshots ORDER BY name"))
+    stored = rows("SELECT DISTINCT category_id AS id, category_name AS name FROM amazon_low_price_snapshots ORDER BY name")
+    stored_ids = {category["id"] for category in stored}
+    # A new deployment has no snapshots yet. Keep the category selector usable
+    # and let the page display an empty list rather than a parsing error.
+    defaults = [
+        {"id": category["id"], "name": category["name"]}
+        for category in ANALYSIS_CATEGORIES
+        if category["id"] not in stored_ids
+    ]
+    return jsonify(defaults + stored)
 
 
 @app.get("/api/amazon/low-prices/<category_id>")
