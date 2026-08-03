@@ -7,14 +7,16 @@ database is migrated to a persistent database.
 from __future__ import annotations
 
 import os
-import re
 import sqlite3
+import secrets
 from pathlib import Path
-from flask import Flask, jsonify, request
+from functools import wraps
+from flask import Flask, jsonify, request, redirect, session, url_for, render_template_string
 
 ROOT = Path(__file__).resolve().parent
 DATABASE = Path(os.environ.get("PINTI_DATABASE", ROOT / "price_tracker.db"))
 app = Flask(__name__, static_folder="public", static_url_path="")
+app.secret_key = os.environ.get("PINTI_SECRET_KEY", secrets.token_urlsafe(32))
 
 ANALYSIS_CATEGORIES = [
     {"id": "featured", "name": "Öne Çıkan Ürünler", "url": "https://www.amazon.com.tr/b?node=21034466031"},
@@ -46,20 +48,61 @@ def ensure_alerts_table():
             base_price REAL NOT NULL, target_price REAL, discount_percent REAL,
             email TEXT NOT NULL, last_price REAL, last_notified_price REAL,
             active INTEGER NOT NULL DEFAULT 1, created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            last_checked DATETIME)""")
+                last_checked DATETIME)""")
+
+
+def logged_in():
+    return session.get("pinti_authenticated") is True
+
+
+def login_required(view):
+    @wraps(view)
+    def wrapped(*args, **kwargs):
+        if logged_in():
+            return view(*args, **kwargs)
+        if request.path.startswith("/api/"):
+            return jsonify(error="Oturum açmalısın."), 401
+        return redirect(url_for("login"))
+    return wrapped
+
+
+@app.get("/login")
+@app.post("/login")
+def login():
+    error = ""
+    if request.method == "POST":
+        expected_user = os.environ.get("PINTI_USERNAME")
+        expected_password = os.environ.get("PINTI_PASSWORD")
+        if expected_user and expected_password and request.form.get("username") == expected_user and request.form.get("password") == expected_password:
+            session.clear()
+            session["pinti_authenticated"] = True
+            return redirect(url_for("home"))
+        error = "Kullanıcı adı veya şifre hatalı."
+    return render_template_string("""<!doctype html><html lang="tr"><meta charset="utf-8"><title>PİNTİ Giriş</title>
+    <style>body{display:grid;place-items:center;min-height:100vh;margin:0;background:#f4f7fb;font:15px system-ui}form{width:min(360px,calc(100% - 40px));padding:28px;background:#fff;border-radius:14px;box-shadow:0 8px 28px #15213422}label,input,button{display:block;width:100%;box-sizing:border-box}label{margin:13px 0 5px;font-weight:700}input{padding:11px;border:1px solid #cbd5e1;border-radius:7px}button{margin-top:18px;padding:11px;border:0;border-radius:7px;background:#1464b8;color:#fff;font-weight:800}.error{color:#b42318}</style>
+    <form method="post"><h1>PİNTİ</h1><p>Yönetim paneline giriş yap.</p>{% if error %}<p class="error">{{ error }}</p>{% endif %}<label>Kullanıcı adı</label><input name="username" required autofocus><label>Şifre</label><input name="password" type="password" required><button>Giriş yap</button></form></html>""", error=error)
+
+
+@app.get("/logout")
+def logout():
+    session.clear()
+    return redirect(url_for("login"))
 
 
 @app.get("/")
+@login_required
 def home():
     return app.send_static_file("index.html")
 
 
 @app.get("/api/amazon/analysis-categories")
+@login_required
 def analysis_categories():
     return jsonify(ANALYSIS_CATEGORIES)
 
 
 @app.get("/api/amazon/best-sellers")
+@login_required
 def best_sellers():
     category_id = request.args.get("categoryId", "featured")
     sql = """SELECT rank,title,price,category_id,category_name,product_url,image_url,captured_at
@@ -70,6 +113,7 @@ def best_sellers():
 
 
 @app.get("/api/amazon/review-radar")
+@login_required
 def review_radar():
     category_id = request.args.get("categoryId", "featured")
     sql = """SELECT asin,title,price,category_id,category_name,rating,review_count,image_url,product_url,captured_at
@@ -80,11 +124,13 @@ def review_radar():
 
 
 @app.get("/api/amazon/low-prices/categories")
+@login_required
 def low_price_categories():
     return jsonify(rows("SELECT DISTINCT category_id AS id, category_name AS name FROM amazon_low_price_snapshots ORDER BY name"))
 
 
 @app.get("/api/amazon/low-prices/<category_id>")
+@login_required
 def low_prices(category_id):
     sql = """SELECT category_id,category_name,low_price_period,asin,position,title,price,original_price,discount_percent,
              monthly_sales_minimum,monthly_sales_text,review_count,rating,product_url,image_url,captured_at
@@ -93,12 +139,14 @@ def low_prices(category_id):
 
 
 @app.get("/api/alerts")
+@login_required
 def alerts():
     ensure_alerts_table()
     return jsonify(rows("SELECT * FROM product_alerts ORDER BY active DESC,id DESC"))
 
 
 @app.post("/api/alerts")
+@login_required
 def create_alert():
     ensure_alerts_table()
     payload = request.get_json(force=True)
@@ -114,6 +162,7 @@ def create_alert():
 
 
 @app.delete("/api/alerts/<int:alert_id>")
+@login_required
 def delete_alert(alert_id):
     ensure_alerts_table()
     with db() as connection:

@@ -8,7 +8,12 @@
 4. WSGI dosyasını aşağıdaki gibi değiştir:
 
 ```python
+import os
 import sys
+
+os.environ['PINTI_USERNAME'] = 'yonetici-kullanici-adi'
+os.environ['PINTI_PASSWORD'] = 'guclu-bir-sifre'
+os.environ['PINTI_SECRET_KEY'] = 'uzun-rastgele-bir-gizli-deger'
 path = '/home/KULLANICI_ADIN/Pinti'
 if path not in sys.path:
     sys.path.insert(0, path)
