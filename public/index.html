@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Amazon Düşük Fiyat Radarı</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <main class="app-shell">
+        <header class="hero">
+            <p class="eyebrow">PİNTİ</p>
+            <h1 id="viewTitle">Düşük Fiyat Radarı</h1>
+            <p>30, 60, 90 ve 365 günün en düşük fiyat etiketlerini kategori bazında analiz et.</p>
+        </header>
+
+        <nav class="source-tabs" aria-label="Veri kaynağı">
+            <button class="source-tab active" data-view="low-prices">Düşük Fiyat Radarı</button>
+            <button class="source-tab" data-view="best-sellers">Amazon Çok Satanlar</button>
+            <button class="source-tab" data-view="review-radar">Amazon Yorum Radarı</button>
+            <button class="source-tab" data-view="alerts">Alarmlar</button>
+        </nav>
+
+        <section class="controls-panel" aria-label="Analiz kontrolleri">
+            <label>
+                Kategori
+                <select id="categorySelect" disabled>
+                    <option>Kategoriler yükleniyor…</option>
+                </select>
+            </label>
+            <button id="refreshCategoryBtn" class="primary" disabled>Seçili kategoriyi tara</button>
+            <button id="refreshAllBtn" disabled>Tüm kategorileri tara</button>
+            <a class="amazon-link" href="https://www.amazon.com.tr/b/?node=219537822031" target="_blank" rel="noopener">Amazon sayfasını aç ↗</a>
+        </section>
+
+        <section id="filterPanel" class="filter-panel" aria-label="Birleşik filtreler">
+            <label>Minimum fiyat <input id="minPrice" type="number" min="0" step="1" placeholder="0"></label>
+            <label>Maksimum fiyat <input id="maxPrice" type="number" min="0" step="1" placeholder="Sınırsız"></label>
+            <label>En az indirim <input id="minDiscount" type="number" min="0" max="100" step="1" value="0"></label>
+            <label>En az satış <input id="minSales" type="number" min="0" step="1" value="0"></label>
+            <label>Sıralama
+                <select id="sortSelect">
+                    <option value="price-asc">Fiyat: düşükten yükseğe</option>
+                    <option value="price-desc">Fiyat: yüksekten düşüğe</option>
+                    <option value="discount-desc">İndirim: yüksekten düşüğe</option>
+                    <option value="sales-desc">Satış: yüksekten düşüğe</option>
+                </select>
+            </label>
+            <button id="clearFiltersBtn">Filtreleri temizle</button>
+        </section>
+
+        <section class="info-strip">
+            <span id="scanStatus">Kategori listesi alınıyor…</span>
+            <span>Satış miktarı, yalnızca Amazon’un “Geçen ay … satın alındı” etiketi yayımladığı ürünlerde gösterilir.</span>
+        </section>
+
+        <nav id="periodTabs" class="period-tabs" aria-label="En düşük fiyat dönemi">
+            <button class="period-tab active" data-period="30">30 gün</button>
+            <button class="period-tab" data-period="60">60 gün</button>
+            <button class="period-tab" data-period="90">90 gün</button>
+            <button class="period-tab" data-period="365">365 gün</button>
+        </nav>
+
+        <section id="summary" class="summary-grid" aria-live="polite">
+            <div class="empty-state">Tüm kategoriler arka planda taramaya alınıyor…</div>
+        </section>
+
+        <section class="method-note">
+            <h2>Nasıl sıralanır?</h2>
+            <p>Her dönem ve kategoride bütün ürünler; indirim oranına ve geçen ayki satış alt sınırına göre yüksekten düşüğe sıralanır. “50 adetten fazla” etiketi ≥50 olarak değerlendirilir.</p>
+        </section>
+    </main>
+    <div id="scanOverlay" class="scan-overlay" aria-live="polite" aria-busy="true" hidden>
+        <section class="scan-dialog">
+            <div class="scan-spinner" aria-hidden="true"></div>
+            <div>
+                <p class="eyebrow">ARKA PLAN TARAMASI</p>
+                <h2 id="overlayTitle">Amazon verileri hazırlanıyor</h2>
+                <p id="overlayProgress">Tarama kuyruğu oluşturuluyor…</p>
+            </div>
+            <div id="scanLogs" class="scan-logs"></div>
+        </section>
+    </div>
+    <script src="app.js"></script>
+</body>
+</html>
