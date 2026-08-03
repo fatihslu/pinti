@@ -147,6 +147,18 @@ def database_error(error):
     raise error
 
 
+@app.errorhandler(404)
+@app.errorhandler(405)
+def api_route_error(error):
+    """Keep the browser client on JSON even for unavailable API operations."""
+    if request.path.startswith("/api/"):
+        return jsonify(error=(
+            "Bu tarama işlemi PythonAnywhere Flask sürümünde henüz etkin değil. "
+            "Kaydedilmiş analiz kayıtları görüntülenebilir."
+        )), error.code
+    return error
+
+
 def login_required(view):
     @wraps(view)
     def wrapped(*args, **kwargs):
