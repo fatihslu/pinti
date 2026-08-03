@@ -55,6 +55,17 @@ def logged_in():
     return session.get("pinti_authenticated") is True
 
 
+@app.before_request
+def protect_application():
+    # static_url_path kökte olduğu için index.html Flask'ın static handler'ına
+    # düşebilir. Bu merkezi kontrol hem arayüzü hem API'leri korur.
+    if request.path in {"/login", "/health", "/logout"} or logged_in():
+        return None
+    if request.path.startswith("/api/"):
+        return jsonify(error="Oturum açmalısın."), 401
+    return redirect(url_for("login"))
+
+
 def login_required(view):
     @wraps(view)
     def wrapped(*args, **kwargs):
