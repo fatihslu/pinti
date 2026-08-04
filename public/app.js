@@ -25,6 +25,7 @@ const price = value => value != null && Number.isFinite(Number(value))
     ? Number(value).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' TL'
     : 'Fiyat belirtilmemiş';
 const inputNumber = element => Number(element.value || 0);
+const sqliteUtcDate = value => value ? new Date(`${String(value).replace(' ', 'T').replace(/Z$/, '')}Z`) : null;
 
 async function loadAnalysisRuns() {
     const response = await fetch('/api/amazon/analysis-runs');
@@ -36,7 +37,7 @@ async function loadAnalysisRuns() {
 function lastRunMarkup(source) {
     const run = analysisRuns[source];
     if (!run) return '<p class="last-run">Son çalışma: Henüz kayıt yok.</p>';
-    const when = run.finished_at ? new Date(String(run.finished_at).replace(' ', 'T')).toLocaleString('tr-TR') : 'Devam ediyor';
+    const when = run.finished_at ? sqliteUtcDate(run.finished_at).toLocaleString('tr-TR') : 'Devam ediyor';
     const detail = run.status === 'completed'
         ? `${Number(run.item_count || 0)} ürün · ${Number(run.changed_count || 0)} fiyat değişimi`
         : `Hata: ${escapeHtml(run.error || 'Bilinmeyen hata')}`;
@@ -51,7 +52,7 @@ function updateLastUpdateStatus(source = activeView) {
             : 'Son güncelleme: Henüz tamamlanmış tarama yok.';
         return;
     }
-    const when = run.finished_at ? new Date(String(run.finished_at).replace(' ', 'T')).toLocaleString('tr-TR') : 'Devam ediyor';
+    const when = run.finished_at ? sqliteUtcDate(run.finished_at).toLocaleString('tr-TR') : 'Devam ediyor';
     lastUpdateStatus.textContent = run.status === 'completed'
         ? `Son güncelleme: ${when} · ${Number(run.item_count || 0)} ürün · ${Number(run.changed_count || 0)} fiyat değişimi`
         : `Son güncelleme başarısız: ${when} · ${run.error || 'Bilinmeyen hata'}`;
@@ -104,7 +105,7 @@ function chartMarkup(history) {
     const first = history[0], last = history[history.length - 1];
     const change = Number(last.price) - Number(first.price);
     const changeText = change === 0 ? 'Değişim yok' : `${change < 0 ? 'Düşüş' : 'Artış'}: ${price(Math.abs(change))}`;
-    return `<div class="chart-stats"><strong>${price(last.price)}</strong><span>${history.length} ölçüm · ${changeText}</span></div><svg class="price-chart" viewBox="0 0 ${width} ${height}" role="img" aria-label="Fiyat geçmişi grafiği"><line x1="${inset}" y1="${inset}" x2="${inset}" y2="${height - inset}"/><line x1="${inset}" y1="${height - inset}" x2="${width - inset}" y2="${height - inset}"/><polyline points="${points}"/><circle cx="${x(values.length - 1).toFixed(1)}" cy="${y(values.at(-1)).toFixed(1)}" r="4"/></svg><div class="chart-labels"><span>${new Date(first.captured_at).toLocaleString('tr-TR')}</span><span>${new Date(last.captured_at).toLocaleString('tr-TR')}</span></div>`;
+    return `<div class="chart-stats"><strong>${price(last.price)}</strong><span>${history.length} ölçüm · ${changeText}</span></div><svg class="price-chart" viewBox="0 0 ${width} ${height}" role="img" aria-label="Fiyat geçmişi grafiği"><line x1="${inset}" y1="${inset}" x2="${inset}" y2="${height - inset}"/><line x1="${inset}" y1="${height - inset}" x2="${width - inset}" y2="${height - inset}"/><polyline points="${points}"/><circle cx="${x(values.length - 1).toFixed(1)}" cy="${y(values.at(-1)).toFixed(1)}" r="4"/></svg><div class="chart-labels"><span>${sqliteUtcDate(first.captured_at).toLocaleString('tr-TR')}</span><span>${sqliteUtcDate(last.captured_at).toLocaleString('tr-TR')}</span></div>`;
 }
 
 function wireGraphButtons() {
@@ -384,4 +385,27 @@ Object.values(filters).forEach(control => control.addEventListener('input', rend
 document.getElementById('clearFiltersBtn').addEventListener('click', () => { filters.minPrice.value = filters.maxPrice.value = ''; filters.minDiscount.value = filters.minSales.value = 0; filters.sortSelect.value = 'price-asc'; renderLowPrices(); });
 document.getElementById('closePriceChart').addEventListener('click', () => { priceChartOverlay.hidden = true; });
 priceChartOverlay.addEventListener('click', event => { if (event.target === priceChartOverlay) priceChartOverlay.hidden = true; });
+
+let dashboardRefreshInFlight = false;
+async function refreshActiveDashboard() {
+    if (dashboardRefreshInFlight) return;
+    dashboardRefreshInFlight = true;
+    try {
+        const previousFinishedAt = analysisRuns[activeView]?.finished_at || '';
+        await loadAnalysisRuns();
+        updateLastUpdateStatus(activeView);
+        const latestFinishedAt = analysisRuns[activeView]?.finished_at || '';
+        if (!latestFinishedAt || latestFinishedAt === previousFinishedAt) return;
+        if (activeView === 'low-prices') await loadSnapshot();
+        else if (activeView === 'deals') await loadDeals();
+        else if (activeView === 'best-sellers') await loadBestSellers();
+        else if (activeView === 'review-radar') await loadReviewRadar();
+    } catch (error) {
+        console.warn(`Pano güncellenemedi: ${error.message}`);
+    } finally {
+        dashboardRefreshInFlight = false;
+    }
+}
+
+setInterval(refreshActiveDashboard, 60000);
 loadCategories();
