@@ -40,7 +40,7 @@ function lastRunMarkup(source) {
     const when = run.finished_at ? sqliteUtcDate(run.finished_at).toLocaleString('tr-TR') : 'Devam ediyor';
     const detail = run.status === 'completed'
         ? `${Number(run.item_count || 0)} ürün · ${Number(run.changed_count || 0)} fiyat değişimi`
-        : `Hata: ${escapeHtml(run.error || 'Bilinmeyen hata')}`;
+        : run.status === 'running' ? 'Tarama sürüyor…' : `Hata: ${escapeHtml(run.error || 'Bilinmeyen hata')}`;
     return `<p class="last-run ${run.status === 'completed' ? '' : 'failed'}">Son çalışma: ${when} · ${detail}</p>`;
 }
 
@@ -55,7 +55,18 @@ function updateLastUpdateStatus(source = activeView) {
     const when = run.finished_at ? sqliteUtcDate(run.finished_at).toLocaleString('tr-TR') : 'Devam ediyor';
     lastUpdateStatus.textContent = run.status === 'completed'
         ? `Son güncelleme: ${when} · ${Number(run.item_count || 0)} ürün · ${Number(run.changed_count || 0)} fiyat değişimi`
-        : `Son güncelleme başarısız: ${when} · ${run.error || 'Bilinmeyen hata'}`;
+        : run.status === 'running' ? `Tarama sürüyor: ${when}` : `Son güncelleme başarısız: ${when} · ${run.error || 'Bilinmeyen hata'}`;
+}
+
+async function updateLowPriceRunIndicator() {
+    if (activeView !== 'low-prices') return;
+    try {
+        const response = await fetch('/api/amazon/low-prices/scan-status');
+        const status = await response.json();
+        if (status.status === 'running') {
+            lastUpdateStatus.textContent = `Saatlik tam tarama sürüyor: ${status.completed || 0}/${status.total || '?'} kategori · ${status.currentCategory || 'hazırlanıyor'}`;
+        }
+    } catch (_) { /* Durum bilgisi alınamazsa son tamamlanan kayıt gösterilir. */ }
 }
 
 function alarmButton(item, source) {
@@ -169,6 +180,7 @@ async function loadSnapshot() {
     if (!categorySelect.value) return;
     await loadAnalysisRuns();
     updateLastUpdateStatus('low-prices');
+    await updateLowPriceRunIndicator();
     const response = await fetch(`/api/amazon/low-prices/${encodeURIComponent(categorySelect.value)}`);
     const items = await response.json();
     if (!response.ok) throw new Error(items.error || 'Kayıt alınamadı');
@@ -394,6 +406,7 @@ async function refreshActiveDashboard() {
         const previousFinishedAt = analysisRuns[activeView]?.finished_at || '';
         await loadAnalysisRuns();
         updateLastUpdateStatus(activeView);
+        await updateLowPriceRunIndicator();
         const latestFinishedAt = analysisRuns[activeView]?.finished_at || '';
         if (!latestFinishedAt || latestFinishedAt === previousFinishedAt) return;
         if (activeView === 'low-prices') await loadSnapshot();

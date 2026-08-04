@@ -18,6 +18,8 @@ class PriceTracker {
         this.advancedScraper = null;
         this.usePuppeteer = AdvancedScraper !== null && process.env.USE_PUPPETEER !== 'false';
         this.hourlyAnalysisRunning = false;
+        this.lowPriceCategoriesCache = null;
+        this.lowPriceCategoriesCacheUntil = 0;
     }
 
     detectSiteType(url) { return detectSiteType(url); }
@@ -73,6 +75,12 @@ class PriceTracker {
                 status: error ? 'failed' : 'completed', itemCount, changedCount, error
             });
         } catch (recordError) { console.warn(`Tarama kaydı yazılamadı: ${recordError.message}`); }
+    }
+
+    async markRunStarted(source) {
+        if (typeof this.db.recordAnalysisRun !== 'function') return;
+        try { await this.db.recordAnalysisRun(source, { status: 'running' }); }
+        catch (error) { console.warn(`Tarama başlangıcı kaydedilemedi: ${error.message}`); }
     }
 
     async scrapeProduct(url) {
@@ -135,6 +143,7 @@ class PriceTracker {
 
     async refreshAmazonBestSellers(category = { id: 'featured', name: 'Öne Çıkan Ürünler', url: 'https://www.amazon.com.tr/b?node=21034466031' }) {
         if (!this.usePuppeteer) throw new Error('Amazon Çok Satanlar kolektörü için tarayıcı desteği etkin olmalı.');
+        await this.markRunStarted('best-sellers');
         const previous = await this.latestSnapshot('getLatestAmazonBestSellers', category.id);
         const items = await (await this.getAdvancedScraper()).scrapeAmazonBestSellers(20, category.url);
         if (!items.length) throw new Error('Amazon Çok Satanlar listesinden fiyatlı ürün alınamadı.');
@@ -148,6 +157,7 @@ class PriceTracker {
 
     async refreshAmazonDeals() {
         if (!this.usePuppeteer) throw new Error('Amazon kampanya kolektörü için tarayıcı desteği etkin olmalı.');
+        await this.markRunStarted('deals');
         const previous = await this.latestSnapshot('getLatestAmazonDeals');
         const items = await (await this.getAdvancedScraper()).scrapeAmazonDeals(600);
         if (!items.length) throw new Error('Amazon kampanya sayfasından fiyatlı ürün alınamadı.');
@@ -161,11 +171,16 @@ class PriceTracker {
 
     async getAmazonLowPriceCategories() {
         if (!this.usePuppeteer) throw new Error('Amazon kategori listesi için tarayıcı desteği etkin olmalı.');
-        return (await this.getAdvancedScraper()).getAmazonLowPriceCategories();
+        if (this.lowPriceCategoriesCache && Date.now() < this.lowPriceCategoriesCacheUntil) return this.lowPriceCategoriesCache;
+        const categories = await (await this.getAdvancedScraper()).getAmazonLowPriceCategories();
+        this.lowPriceCategoriesCache = categories;
+        this.lowPriceCategoriesCacheUntil = Date.now() + 6 * 60 * 60 * 1000;
+        return categories;
     }
 
     async refreshAmazonReviewRadar(category = { id: 'featured', name: 'Öne Çıkan Ürünler', url: 'https://www.amazon.com.tr/b?node=21034466031' }) {
         if (!this.usePuppeteer) throw new Error('Amazon yorum radarı için tarayıcı desteği etkin olmalı.');
+        await this.markRunStarted('review-radar');
         const previous = await this.latestSnapshot('getLatestAmazonReviewRadar', category.id);
         const items = await (await this.getAdvancedScraper()).scrapeAmazonReviewRadar(category.url, 600);
         if (!items.length) throw new Error('Amazon sayfasında ayrıştırılabilir ürün bulunamadı.');
@@ -180,6 +195,7 @@ class PriceTracker {
     async refreshAmazonLowPriceCategory(category, { notify = true, recordRun = true } = {}) {
         if (!category?.id || !category?.name) throw new Error('Kategori bilgisi gerekli.');
         if (!this.usePuppeteer) throw new Error('Amazon en düşük fiyatlar taraması için tarayıcı desteği etkin olmalı.');
+        if (recordRun) await this.markRunStarted('low-prices');
         const previous = await this.latestSnapshot('getLatestAmazonLowPriceItems', category.id);
         const items = await (await this.getAdvancedScraper()).scrapeAmazonLowPriceCategory(category, 500);
         if (!items.length) throw new Error(`${category.name} kategorisinde ayrıştırılabilir düşük fiyat ürünü bulunamadı.`);
@@ -196,6 +212,7 @@ class PriceTracker {
     }
 
     async refreshAllAmazonLowPriceCategories(onProgress = () => {}) {
+        await this.markRunStarted('low-prices');
         const categories = await this.getAmazonLowPriceCategories();
         const summary = { total: categories.length, completed: 0, changedCategories: 0, savedCount: 0, failures: [] };
         const priceChanges = [];
@@ -296,6 +313,29 @@ class PriceTracker {
         return true;
     }
 
+    async runMissedHourlyAnalyses() {
+        if (typeof this.db.getLatestAnalysisRuns !== 'function') return false;
+        try {
+            const latestRuns = await this.db.getLatestAnalysisRuns();
+            const bySource = new Map(latestRuns.map(run => [run.source, run]));
+            const hourStart = new Date();
+            hourStart.setMinutes(0, 0, 0);
+            const requiredSources = ['low-prices', 'best-sellers', 'review-radar', 'deals'];
+            const missed = requiredSources.some(source => {
+                const run = bySource.get(source);
+                if (!run || run.status !== 'completed' || !run.finished_at) return true;
+                const finishedAt = new Date(`${String(run.finished_at).replace(' ', 'T').replace(/Z$/, '')}Z`);
+                return finishedAt < hourStart;
+            });
+            if (!missed) return false;
+            console.log('Bu saat için eksik radar turu bulundu; telafi taraması başlatılıyor.');
+            return this.runHourlyAnalyses();
+        } catch (error) {
+            console.warn(`Telafi taraması kontrolü yapılamadı: ${error.message}`);
+            return false;
+        }
+    }
+
     startAutoCheck() {
         cron.schedule('0 * * * *', () => {
             this.runHourlyAnalyses().catch(error => console.warn(`Saatlik radar turu durdu: ${error.message}`));
@@ -304,6 +344,8 @@ class PriceTracker {
             try { await this.checkTabAlerts(); }
             catch (error) { console.warn(`Alarm kontrolü yapılamadı: ${error.message}`); }
         });
+        // Sunucu tam saatten sonra yeniden başladıysa bir sonraki saati bekleme.
+        setTimeout(() => this.runMissedHourlyAnalyses(), 12000);
         console.log('Düşük Fiyat, Fırsatlar, Çok Satanlar ve Yorum Radarı her saat sırayla yenilenir.');
     }
 }
