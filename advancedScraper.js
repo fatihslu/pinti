@@ -456,13 +456,10 @@ class AdvancedScraper {
             }
 
             const validDeals = [...byAsin.values()].filter(deal => deal.asin && deal.title && Number.isFinite(deal.price) && deal.price > 0 && deal.productUrl);
-            await this.enrichAmazonSalesSignals(validDeals.slice(0, SALES_SIGNAL_DETAIL_LIMIT));
-            for (const item of validDeals.slice(SALES_SIGNAL_DETAIL_LIMIT)) {
-                item.reviewCount = null;
-                item.rating = null;
-                item.monthlySalesText = '';
-                item.monthlySalesMinimum = null;
-            }
+            // Fırsatlar listesinde satış filtresi bulunuyor. Bu yüzden yalnızca ilk
+            // ürünleri değil, listedeki bütün ürünlerin ayrıntı sayfasındaki satış
+            // etiketini kontrol et ve mevcutsa kalıcı anlık görüntüye yaz.
+            await this.enrichAmazonSalesSignals(validDeals);
             return validDeals;
         } finally {
             await page.close();
