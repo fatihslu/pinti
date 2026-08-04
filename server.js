@@ -169,6 +169,25 @@ app.get('/api/amazon/analysis-categories', async (req, res) => {
     catch (error) { res.status(500).json({ error: error.message }); }
 });
 
+app.get('/api/amazon/analysis-runs', async (req, res) => {
+    try { res.json(await db.getLatestAnalysisRuns()); }
+    catch (error) { res.status(500).json({ error: error.message }); }
+});
+
+app.get('/api/amazon/price-history', async (req, res) => {
+    try {
+        const allowedSources = new Set(['low-prices', 'deals', 'best-sellers', 'review-radar']);
+        if (!allowedSources.has(req.query.source) || !req.query.key) return res.status(400).json({ error: 'Geçerli kaynak ve ürün anahtarı gerekli.' });
+        res.json(await db.getAmazonPriceHistory({
+            source: req.query.source,
+            key: req.query.key,
+            categoryId: req.query.categoryId || DEFAULT_ANALYSIS_CATEGORY.id,
+            period: req.query.period,
+            limit: req.query.limit
+        }));
+    } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
 app.get('/api/amazon/best-sellers', async (req, res) => {
     try { res.json(await db.getLatestAmazonBestSellers(req.query.categoryId || DEFAULT_ANALYSIS_CATEGORY.id)); }
     catch (error) { res.status(500).json({ error: error.message }); }

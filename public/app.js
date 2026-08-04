@@ -12,8 +12,12 @@ const periodTabs = document.getElementById('periodTabs');
 const filterPanel = document.getElementById('filterPanel');
 const filters = Object.fromEntries(['minPrice', 'maxPrice', 'minDiscount', 'minSales', 'sortSelect'].map(id => [id, document.getElementById(id)]));
 const viewTitle = document.getElementById('viewTitle');
+const priceChartOverlay = document.getElementById('priceChartOverlay');
+const priceChartTitle = document.getElementById('priceChartTitle');
+const priceChartContent = document.getElementById('priceChartContent');
 let categories = [], analysisCategories = [], currentItems = [], activePeriod = 30, activeView = 'low-prices', scanPollTimer;
 let bestSellerCategoryId = 'featured', reviewRadarCategoryId = 'featured';
+let analysisRuns = {};
 
 const escapeHtml = value => String(value ?? '').replace(/[&<>'"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[char]);
 const price = value => value != null && Number.isFinite(Number(value))
@@ -21,9 +25,32 @@ const price = value => value != null && Number.isFinite(Number(value))
     : 'Fiyat belirtilmemiş';
 const inputNumber = element => Number(element.value || 0);
 
+async function loadAnalysisRuns() {
+    const response = await fetch('/api/amazon/analysis-runs');
+    const rows = await response.json();
+    if (!response.ok) throw new Error(rows.error || 'Son çalışma bilgisi alınamadı.');
+    analysisRuns = Object.fromEntries(rows.map(run => [run.source, run]));
+}
+
+function lastRunMarkup(source) {
+    const run = analysisRuns[source];
+    if (!run) return '<p class="last-run">Son çalışma: Henüz kayıt yok.</p>';
+    const when = run.finished_at ? new Date(String(run.finished_at).replace(' ', 'T')).toLocaleString('tr-TR') : 'Devam ediyor';
+    const detail = run.status === 'completed'
+        ? `${Number(run.item_count || 0)} ürün · ${Number(run.changed_count || 0)} fiyat değişimi`
+        : `Hata: ${escapeHtml(run.error || 'Bilinmeyen hata')}`;
+    return `<p class="last-run ${run.status === 'completed' ? '' : 'failed'}">Son çalışma: ${when} · ${detail}</p>`;
+}
+
 function alarmButton(item, source) {
     const url = item.product_url || item.url || '';
     return `<button class="set-alert" data-source="${escapeHtml(source)}" data-title="${escapeHtml(item.title)}" data-url="${escapeHtml(url)}" data-price="${Number(item.price) || 0}" data-category="${escapeHtml(item.category_name || item.categoryName || '')}">Alarm kur</button>`;
+}
+
+function graphButton(item, source) {
+    const key = item.asin || item.product_url || item.url || '';
+    if (!key) return '';
+    return `<button class="show-chart" data-source="${escapeHtml(source)}" data-key="${escapeHtml(key)}" data-category="${escapeHtml(item.category_id || '')}" data-period="${escapeHtml(item.low_price_period || '')}" data-title="${escapeHtml(item.title)}">Grafik</button>`;
 }
 
 function card(item, bestSeller = false, source = 'low-prices') {
@@ -48,6 +75,54 @@ function wireAlertButtons() {
         const result = await response.json();
         alert(response.ok ? 'Alarm kuruldu. Fiyat her saat kontrol edilecek.' : (result.error || 'Alarm kurulamadı.'));
     }));
+    wireGraphButtons();
+}
+
+function chartMarkup(history) {
+    const values = history.map(item => Number(item.price)).filter(Number.isFinite);
+    if (!values.length) return '<div class="empty-state">Bu ürün için henüz fiyat ölçümü yok.</div>';
+    const width = 680, height = 230, inset = 30;
+    const min = Math.min(...values), max = Math.max(...values), range = max - min || Math.max(max * 0.04, 1);
+    const x = index => inset + (values.length === 1 ? (width - inset * 2) / 2 : index * (width - inset * 2) / (values.length - 1));
+    const y = value => height - inset - ((value - min) / range) * (height - inset * 2);
+    const points = values.map((value, index) => `${x(index).toFixed(1)},${y(value).toFixed(1)}`).join(' ');
+    const first = history[0], last = history[history.length - 1];
+    const change = Number(last.price) - Number(first.price);
+    const changeText = change === 0 ? 'Değişim yok' : `${change < 0 ? 'Düşüş' : 'Artış'}: ${price(Math.abs(change))}`;
+    return `<div class="chart-stats"><strong>${price(last.price)}</strong><span>${history.length} ölçüm · ${changeText}</span></div><svg class="price-chart" viewBox="0 0 ${width} ${height}" role="img" aria-label="Fiyat geçmişi grafiği"><line x1="${inset}" y1="${inset}" x2="${inset}" y2="${height - inset}"/><line x1="${inset}" y1="${height - inset}" x2="${width - inset}" y2="${height - inset}"/><polyline points="${points}"/><circle cx="${x(values.length - 1).toFixed(1)}" cy="${y(values.at(-1)).toFixed(1)}" r="4"/></svg><div class="chart-labels"><span>${new Date(first.captured_at).toLocaleString('tr-TR')}</span><span>${new Date(last.captured_at).toLocaleString('tr-TR')}</span></div>`;
+}
+
+function wireGraphButtons() {
+    document.querySelectorAll('.set-alert').forEach(alertButton => {
+        const row = alertButton.closest('.product-with-alert');
+        if (!row || row.querySelector('.show-chart')) return;
+        const link = row.querySelector('.summary-product')?.href || '';
+        const source = alertButton.dataset.source;
+        const asin = link.match(/\/dp\/([A-Z0-9]{10})/i)?.[1] || '';
+        const key = asin || link;
+        if (!key) return;
+        const category = source === 'best-sellers' ? bestSellerCategoryId : source === 'review-radar' ? reviewRadarCategoryId : source === 'low-prices' ? categorySelect.value : '';
+        const button = document.createElement('button');
+        button.type = 'button'; button.className = 'show-chart'; button.textContent = 'Grafik';
+        button.dataset.source = source; button.dataset.key = key; button.dataset.category = category;
+        button.dataset.period = source === 'low-prices' ? String(activePeriod) : '';
+        button.dataset.title = row.querySelector('.product-title')?.textContent?.trim() || 'Ürün fiyat grafiği';
+        alertButton.before(button);
+        button.addEventListener('click', async () => {
+            priceChartOverlay.hidden = false;
+            priceChartTitle.textContent = button.dataset.title;
+            priceChartContent.innerHTML = '<p>Fiyat geçmişi yükleniyor…</p>';
+            try {
+                const query = new URLSearchParams({ source: button.dataset.source, key: button.dataset.key });
+                if (button.dataset.category) query.set('categoryId', button.dataset.category);
+                if (button.dataset.period) query.set('period', button.dataset.period);
+                const response = await fetch(`/api/amazon/price-history?${query}`);
+                const history = await response.json();
+                if (!response.ok) throw new Error(history.error || 'Fiyat geçmişi alınamadı.');
+                priceChartContent.innerHTML = chartMarkup(history);
+            } catch (error) { priceChartContent.innerHTML = `<div class="empty-state">${escapeHtml(error.message)}</div>`; }
+        });
+    });
 }
 
 function filterItems() {
@@ -70,11 +145,13 @@ function filterItems() {
 function renderLowPrices() {
     const items = filterItems();
     summary.innerHTML = `<article class="summary-card full-width"><h2>${items.length} ürün · Birleşik filtre sonucu</h2>${items.length ? `<div class="product-list">${items.map(item => card(item)).join('')}</div>` : '<div class="empty-state">Bu filtre kombinasyonunda ürün bulunamadı.</div>'}</article>`;
+    summary.querySelector('h2')?.insertAdjacentHTML('afterend', lastRunMarkup('low-prices'));
     wireAlertButtons();
 }
 
 async function loadSnapshot() {
     if (!categorySelect.value) return;
+    await loadAnalysisRuns();
     const response = await fetch(`/api/amazon/low-prices/${encodeURIComponent(categorySelect.value)}`);
     const items = await response.json();
     if (!response.ok) throw new Error(items.error || 'Kayıt alınamadı');
@@ -96,6 +173,7 @@ function analysisCategoryOptions(selected) {
 }
 
 async function loadBestSellers() {
+    await loadAnalysisRuns();
     await loadAnalysisCategories();
     const response = await fetch(`/api/amazon/best-sellers?categoryId=${encodeURIComponent(bestSellerCategoryId)}`);
     const items = await response.json();
@@ -110,7 +188,7 @@ async function loadBestSellers() {
     ['bestMinPrice', 'bestMaxPrice', 'bestSort'].forEach(id => document.getElementById(id).addEventListener('input', render));
     document.getElementById('bestCategory').addEventListener('change', event => { bestSellerCategoryId = event.target.value; loadBestSellers().catch(error => scanStatus.textContent = error.message); });
     document.getElementById('bestRefresh').addEventListener('click', () => (async () => { scanStatus.textContent = 'Çok Satanlar kategorisi taranıyor…'; const response = await fetch('/api/amazon/best-sellers/refresh', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ categoryId: bestSellerCategoryId }) }); const data = await response.json(); if (!response.ok) throw new Error(data.error || 'Tarama başlatılamadı.'); await loadBestSellers(); })().catch(error => scanStatus.textContent = error.message));
-    render(); scanStatus.textContent = `${items.length} Çok Satanlar ürünü gösteriliyor.`;
+    render(); summary.querySelector('h2')?.insertAdjacentHTML('afterend', lastRunMarkup('best-sellers')); scanStatus.textContent = `${items.length} Çok Satanlar ürünü gösteriliyor.`;
 }
 
 function dealCard(item) {
@@ -127,6 +205,7 @@ function dealCard(item) {
 }
 
 async function loadDeals() {
+    await loadAnalysisRuns();
     const response = await fetch('/api/amazon/deals');
     const items = await response.json();
     if (!response.ok) throw new Error(items.error || 'F\u0131rsat kayd\u0131 al\u0131namad\u0131.');
@@ -172,6 +251,7 @@ async function loadDeals() {
         }
     })().catch(error => { scanStatus.textContent = error.message; }));
     render();
+    summary.querySelector('h2')?.insertAdjacentHTML('afterend', lastRunMarkup('deals'));
     scanStatus.textContent = items.length ? `${items.length} Amazon F\u0131rsat\u0131 g\u00f6steriliyor.` : 'Hen\u00fcz f\u0131rsat kayd\u0131 yok. T\u00fcm f\u0131rsatlar\u0131 tara ile ba\u015flatabilirsin.';
 }
 
@@ -185,6 +265,7 @@ function reviewCard(item, index) {
 }
 
 async function loadReviewRadar() {
+    await loadAnalysisRuns();
     await loadAnalysisCategories();
     const response = await fetch(`/api/amazon/review-radar?categoryId=${encodeURIComponent(reviewRadarCategoryId)}`);
     const items = await response.json();
@@ -201,6 +282,7 @@ async function loadReviewRadar() {
     document.getElementById('reviewCategory').addEventListener('change', event => { reviewRadarCategoryId = event.target.value; loadReviewRadar().catch(error => scanStatus.textContent = error.message); });
     document.getElementById('refreshReviewRadarBtn').addEventListener('click', () => startReviewRadar().catch(error => scanStatus.textContent = error.message));
     render();
+    summary.querySelector('h2')?.insertAdjacentHTML('afterend', lastRunMarkup('review-radar'));
     scanStatus.textContent = items.length ? `${items.length} ürün yıldız ve yorum sayısına göre sıralandı.` : 'Analiz başlatılmayı bekliyor.';
 }
 
@@ -280,4 +362,6 @@ refreshAllBtn.addEventListener('click', startAutomaticFullScan);
 document.querySelectorAll('.period-tab').forEach(button => button.addEventListener('click', () => { activePeriod = Number(button.dataset.period); document.querySelectorAll('.period-tab').forEach(tab => tab.classList.toggle('active', tab === button)); renderLowPrices(); }));
 Object.values(filters).forEach(control => control.addEventListener('input', renderLowPrices));
 document.getElementById('clearFiltersBtn').addEventListener('click', () => { filters.minPrice.value = filters.maxPrice.value = ''; filters.minDiscount.value = filters.minSales.value = 0; filters.sortSelect.value = 'price-asc'; renderLowPrices(); });
+document.getElementById('closePriceChart').addEventListener('click', () => { priceChartOverlay.hidden = true; });
+priceChartOverlay.addEventListener('click', event => { if (event.target === priceChartOverlay) priceChartOverlay.hidden = true; });
 loadCategories();

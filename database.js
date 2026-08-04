@@ -206,6 +206,20 @@ class Database {
                 if (!columns.some(column => column.name === 'category_name')) this.db.run("ALTER TABLE amazon_review_radar_snapshots ADD COLUMN category_name TEXT NOT NULL DEFAULT 'Öne Çıkan Ürünler'");
             });
 
+            // Her radarın son başarılı/başarısız çalışma bilgisini kalıcı tutar.
+            this.db.run(`
+                CREATE TABLE IF NOT EXISTS analysis_runs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    source TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    item_count INTEGER NOT NULL DEFAULT 0,
+                    changed_count INTEGER NOT NULL DEFAULT 0,
+                    error TEXT,
+                    started_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    finished_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            `);
+
             // Mevcut kurulumlarda tablo daha önce görselsiz oluşturulmuş olabilir.
             this.db.all('PRAGMA table_info(external_offers)', (error, columns) => {
                 if (!error && !columns.some(column => column.name === 'image_url')) {
@@ -546,6 +560,52 @@ class Database {
                          ORDER BY rating DESC, review_count DESC, title ASC
                          LIMIT ?`;
             this.db.all(sql, [categoryId, categoryId, limit], (error, rows) => error ? reject(error) : resolve(rows));
+        });
+    }
+
+    recordAnalysisRun(source, { status = 'completed', itemCount = 0, changedCount = 0, error = null, startedAt = null } = {}) {
+        return new Promise((resolve, reject) => {
+            const sql = `INSERT INTO analysis_runs (source, status, item_count, changed_count, error, started_at, finished_at)
+                         VALUES (?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP), CURRENT_TIMESTAMP)`;
+            this.db.run(sql, [source, status, itemCount, changedCount, error, startedAt], function(runError) {
+                runError ? reject(runError) : resolve(this.lastID);
+            });
+        });
+    }
+
+    getLatestAnalysisRuns() {
+        return new Promise((resolve, reject) => {
+            const sql = `SELECT source, status, item_count, changed_count, error, started_at, finished_at
+                         FROM analysis_runs
+                         WHERE id IN (SELECT MAX(id) FROM analysis_runs GROUP BY source)`;
+            this.db.all(sql, (error, rows) => error ? reject(error) : resolve(rows));
+        });
+    }
+
+    getAmazonPriceHistory({ source, key, categoryId = 'featured', period = null, limit = 240 }) {
+        return new Promise((resolve, reject) => {
+            const safeLimit = Math.max(1, Math.min(Number(limit) || 240, 1000));
+            const statements = {
+                deals: {
+                    sql: `SELECT price, captured_at FROM (SELECT price, captured_at, id FROM amazon_deal_snapshots WHERE asin = ? ORDER BY captured_at DESC, id DESC LIMIT ?) ORDER BY captured_at ASC, id ASC`,
+                    values: [key, safeLimit]
+                },
+                'best-sellers': {
+                    sql: `SELECT price, captured_at FROM (SELECT price, captured_at, id FROM amazon_bestseller_snapshots WHERE product_url LIKE ? AND category_id = ? ORDER BY captured_at DESC, id DESC LIMIT ?) ORDER BY captured_at ASC, id ASC`,
+                    values: [`%/dp/${key}%`, categoryId, safeLimit]
+                },
+                'review-radar': {
+                    sql: `SELECT price, captured_at FROM (SELECT price, captured_at, id FROM amazon_review_radar_snapshots WHERE asin = ? AND category_id = ? AND price IS NOT NULL ORDER BY captured_at DESC, id DESC LIMIT ?) ORDER BY captured_at ASC, id ASC`,
+                    values: [key, categoryId, safeLimit]
+                },
+                'low-prices': {
+                    sql: `SELECT price, captured_at FROM (SELECT price, captured_at, id FROM amazon_low_price_snapshots WHERE asin = ? AND category_id = ? AND low_price_period = ? ORDER BY captured_at DESC, id DESC LIMIT ?) ORDER BY captured_at ASC, id ASC`,
+                    values: [key, categoryId, Number(period) || 30, safeLimit]
+                }
+            };
+            const statement = statements[source];
+            if (!statement) return resolve([]);
+            this.db.all(statement.sql, statement.values, (error, rows) => error ? reject(error) : resolve(rows));
         });
     }
 

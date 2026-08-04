@@ -1,7 +1,7 @@
 const axios = require('axios');
 const cron = require('node-cron');
 const { detectSiteType, extractPrice, extractProductFromHtml } = require('./productExtractor');
-const { sendAlertEmail } = require('./emailNotifier');
+const { sendAlertEmail, sendPriceChangesEmail } = require('./emailNotifier');
 
 let AdvancedScraper = null;
 try { AdvancedScraper = require('./advancedScraper'); } catch (_) { /* İsteğe bağlı tarayıcı desteği */ }
@@ -17,6 +17,7 @@ class PriceTracker {
         this.db = database;
         this.advancedScraper = null;
         this.usePuppeteer = AdvancedScraper !== null && process.env.USE_PUPPETEER !== 'false';
+        this.hourlyAnalysisRunning = false;
     }
 
     detectSiteType(url) { return detectSiteType(url); }
@@ -26,6 +27,52 @@ class PriceTracker {
     async getAdvancedScraper() {
         if (!this.advancedScraper && AdvancedScraper) this.advancedScraper = new AdvancedScraper();
         return this.advancedScraper;
+    }
+
+    async latestSnapshot(method, ...args) {
+        return typeof this.db[method] === 'function' ? this.db[method](...args) : [];
+    }
+
+    priceChanges(source, items, previousItems, currentKey, previousKey) {
+        if (!previousItems?.length) return [];
+        const previous = new Map(previousItems.map(item => [previousKey(item), item]));
+        return items.flatMap(item => {
+            const before = previous.get(currentKey(item));
+            const previousPrice = before?.price == null ? NaN : Number(before.price);
+            const currentPrice = item.price == null ? NaN : Number(item.price);
+            if (!before || !Number.isFinite(previousPrice) || !Number.isFinite(currentPrice) || previousPrice === currentPrice) return [];
+            return [{
+                source,
+                title: item.title || before.title || 'Amazon ürünü',
+                previousPrice,
+                currentPrice,
+                productUrl: item.productUrl || item.url || before.product_url || ''
+            }];
+        });
+    }
+
+    async notifyPriceChanges(source, changes) {
+        if (!changes.length) return false;
+        const labels = {
+            'low-prices': 'Düşük Fiyat Radarı',
+            deals: 'Amazon Fırsatları',
+            'best-sellers': 'Amazon Çok Satanlar',
+            'review-radar': 'Amazon Yorum Radarı'
+        };
+        try { return await sendPriceChangesEmail(labels[source] || source, changes); }
+        catch (error) {
+            console.warn(`${source} fiyat değişim e-postası gönderilemedi: ${error.message}`);
+            return false;
+        }
+    }
+
+    async recordRun(source, itemCount, changedCount, error = null) {
+        if (typeof this.db.recordAnalysisRun !== 'function') return;
+        try {
+            await this.db.recordAnalysisRun(source, {
+                status: error ? 'failed' : 'completed', itemCount, changedCount, error
+            });
+        } catch (recordError) { console.warn(`Tarama kaydı yazılamadı: ${recordError.message}`); }
     }
 
     async scrapeProduct(url) {
@@ -88,18 +135,26 @@ class PriceTracker {
 
     async refreshAmazonBestSellers(category = { id: 'featured', name: 'Öne Çıkan Ürünler', url: 'https://www.amazon.com.tr/b?node=21034466031' }) {
         if (!this.usePuppeteer) throw new Error('Amazon Çok Satanlar kolektörü için tarayıcı desteği etkin olmalı.');
+        const previous = await this.latestSnapshot('getLatestAmazonBestSellers', category.id);
         const items = await (await this.getAdvancedScraper()).scrapeAmazonBestSellers(20, category.url);
         if (!items.length) throw new Error('Amazon Çok Satanlar listesinden fiyatlı ürün alınamadı.');
         await this.db.saveAmazonBestSellerSnapshot(items, category);
+        const changes = this.priceChanges('best-sellers', items, previous, item => item.url, item => item.product_url);
+        await this.notifyPriceChanges('best-sellers', changes);
+        await this.recordRun('best-sellers', items.length, changes.length);
         console.log(`Amazon Çok Satanlar anlık görüntüsü kaydedildi (${items.length} ürün).`);
         return items;
     }
 
     async refreshAmazonDeals() {
         if (!this.usePuppeteer) throw new Error('Amazon kampanya kolektörü için tarayıcı desteği etkin olmalı.');
+        const previous = await this.latestSnapshot('getLatestAmazonDeals');
         const items = await (await this.getAdvancedScraper()).scrapeAmazonDeals(600);
         if (!items.length) throw new Error('Amazon kampanya sayfasından fiyatlı ürün alınamadı.');
         await this.db.saveAmazonDealSnapshot(items);
+        const changes = this.priceChanges('deals', items, previous, item => item.asin, item => item.asin);
+        await this.notifyPriceChanges('deals', changes);
+        await this.recordRun('deals', items.length, changes.length);
         console.log(`Amazon indirim vitrini anlık görüntüsü kaydedildi (${items.length} ürün).`);
         return items;
     }
@@ -111,34 +166,48 @@ class PriceTracker {
 
     async refreshAmazonReviewRadar(category = { id: 'featured', name: 'Öne Çıkan Ürünler', url: 'https://www.amazon.com.tr/b?node=21034466031' }) {
         if (!this.usePuppeteer) throw new Error('Amazon yorum radarı için tarayıcı desteği etkin olmalı.');
+        const previous = await this.latestSnapshot('getLatestAmazonReviewRadar', category.id);
         const items = await (await this.getAdvancedScraper()).scrapeAmazonReviewRadar(category.url, 600);
         if (!items.length) throw new Error('Amazon sayfasında ayrıştırılabilir ürün bulunamadı.');
         await this.db.saveAmazonReviewRadarSnapshot(items, category);
+        const changes = this.priceChanges('review-radar', items, previous, item => item.asin, item => item.asin);
+        await this.notifyPriceChanges('review-radar', changes);
+        await this.recordRun('review-radar', items.length, changes.length);
         console.log(`Amazon yorum radarı anlık görüntüsü kaydedildi (${items.length} ürün).`);
         return items;
     }
 
-    async refreshAmazonLowPriceCategory(category) {
+    async refreshAmazonLowPriceCategory(category, { notify = true, recordRun = true } = {}) {
         if (!category?.id || !category?.name) throw new Error('Kategori bilgisi gerekli.');
         if (!this.usePuppeteer) throw new Error('Amazon en düşük fiyatlar taraması için tarayıcı desteği etkin olmalı.');
+        const previous = await this.latestSnapshot('getLatestAmazonLowPriceItems', category.id);
         const items = await (await this.getAdvancedScraper()).scrapeAmazonLowPriceCategory(category, 500);
         if (!items.length) throw new Error(`${category.name} kategorisinde ayrıştırılabilir düşük fiyat ürünü bulunamadı.`);
         const snapshot = await this.db.saveAmazonLowPriceSnapshot(category, items);
+        const changes = snapshot.saved
+            ? this.priceChanges('low-prices', items, previous, item => `${item.asin}|${item.lowPricePeriod}`, item => `${item.asin}|${item.low_price_period}`)
+            : [];
+        if (notify) await this.notifyPriceChanges('low-prices', changes);
+        if (recordRun) await this.recordRun('low-prices', items.length, changes.length);
         console.log(snapshot.saved
             ? `Amazon düşük fiyat anlık görüntüsü kaydedildi: ${category.name} (${snapshot.count} ürün).`
             : `Amazon düşük fiyat vitrini değişmedi: ${category.name}.`);
-        return { items, saved: snapshot.saved, savedCount: snapshot.count };
+        return { items, saved: snapshot.saved, savedCount: snapshot.count, priceChanges: changes };
     }
 
     async refreshAllAmazonLowPriceCategories(onProgress = () => {}) {
         const categories = await this.getAmazonLowPriceCategories();
         const summary = { total: categories.length, completed: 0, changedCategories: 0, savedCount: 0, failures: [] };
+        const priceChanges = [];
+        let scannedItemCount = 0;
         for (const category of categories) {
             try {
-                const result = await this.refreshAmazonLowPriceCategory(category);
+                const result = await this.refreshAmazonLowPriceCategory(category, { notify: false, recordRun: false });
                 summary.completed++;
                 if (result.saved) summary.changedCategories++;
                 summary.savedCount += result.savedCount;
+                scannedItemCount += result.items.length;
+                priceChanges.push(...(result.priceChanges || []));
                 onProgress({ ...summary, category, result, status: 'running' });
             } catch (error) {
                 summary.completed++;
@@ -146,6 +215,8 @@ class PriceTracker {
                 onProgress({ ...summary, category, status: 'running' });
             }
         }
+        await this.notifyPriceChanges('low-prices', priceChanges);
+        await this.recordRun('low-prices', scannedItemCount, priceChanges.length);
         return summary;
     }
 
@@ -190,36 +261,40 @@ class PriceTracker {
         }
     }
 
+    async runHourlyAnalyses() {
+        if (this.hourlyAnalysisRunning) {
+            console.warn('Saatlik radar turu hâlâ çalışıyor; yeni tur atlandı.');
+            return false;
+        }
+        this.hourlyAnalysisRunning = true;
+        const run = async (source, task) => {
+            try { await task(); }
+            catch (error) {
+                console.warn(`${source} saatlik taraması başarısız: ${error.message}`);
+                await this.recordRun(source, 0, 0, error.message);
+            }
+        };
+        try {
+            // Aynı Chrome oturumuna eşzamanlı yük bindirmemek için radarlar sırayla çalışır.
+            await run('low-prices', () => this.refreshAllAmazonLowPriceCategories());
+            await run('best-sellers', () => this.refreshAmazonBestSellers());
+            await run('review-radar', () => this.refreshAmazonReviewRadar());
+            await run('deals', () => this.refreshAmazonDeals());
+        } finally {
+            this.hourlyAnalysisRunning = false;
+        }
+        return true;
+    }
+
     startAutoCheck() {
-        cron.schedule('0 * * * *', async () => {
-            if (this.lowPriceAutoScanRunning) return;
-            this.lowPriceAutoScanRunning = true;
-            try {
-                const result = await this.refreshAllAmazonLowPriceCategories();
-                console.log(`Amazon düşük fiyat kategorileri saatlik yenilendi (${result.savedCount} kayıt).`);
-            } catch (error) {
-                console.warn(`Amazon düşük fiyat vitrini güncellenemedi: ${error.message}`);
-            } finally {
-                this.lowPriceAutoScanRunning = false;
-            }
-        });
-        cron.schedule('0 */3 * * *', async () => {
-            if (this.bestSellerAutoScanRunning) return;
-            this.bestSellerAutoScanRunning = true;
-            try {
-                const items = await this.refreshAmazonBestSellers();
-                console.log(`Amazon Çok Satanlar 3 saatlik yenilendi (${items.length} ürün).`);
-            } catch (error) {
-                console.warn(`Amazon Çok Satanlar yenilenemedi: ${error.message}`);
-            } finally {
-                this.bestSellerAutoScanRunning = false;
-            }
+        cron.schedule('0 * * * *', () => {
+            this.runHourlyAnalyses().catch(error => console.warn(`Saatlik radar turu durdu: ${error.message}`));
         });
         cron.schedule('15 * * * *', async () => {
             try { await this.checkTabAlerts(); }
             catch (error) { console.warn(`Alarm kontrolü yapılamadı: ${error.message}`); }
         });
-        console.log('Amazon düşük fiyat kategorilerinin tamamı saat başı, Çok Satanlar ise 3 saatte bir yenilenir.');
+        console.log('Düşük Fiyat, Fırsatlar, Çok Satanlar ve Yorum Radarı her saat sırayla yenilenir.');
     }
 }
 
