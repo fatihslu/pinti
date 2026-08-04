@@ -1,8 +1,8 @@
 // email.config.js dosyasını bu şablona göre doldur.
 module.exports = {
     host: 'smtp.gmail.com',
-    port: 587,
-    secure: false,
+    port: 465,
+    secure: true,
     user: 'gonderen@gmail.com',
     pass: 'gmail-uygulama-sifresi',
     from: 'PİNTİ <gonderen@gmail.com>',
