@@ -7,6 +7,8 @@ const summary = document.getElementById('summary');
 const scanOverlay = document.getElementById('scanOverlay');
 const overlayTitle = document.getElementById('overlayTitle');
 const overlayProgress = document.getElementById('overlayProgress');
+const overlayProgressBar = document.getElementById('overlayProgressBar');
+const overlayStage = document.getElementById('overlayStage');
 const scanLogs = document.getElementById('scanLogs');
 const controlsPanel = document.querySelector('.controls-panel');
 const periodTabs = document.getElementById('periodTabs');
@@ -16,7 +18,7 @@ const viewTitle = document.getElementById('viewTitle');
 const priceChartOverlay = document.getElementById('priceChartOverlay');
 const priceChartTitle = document.getElementById('priceChartTitle');
 const priceChartContent = document.getElementById('priceChartContent');
-let categories = [], analysisCategories = [], currentItems = [], activePeriod = 30, activeView = 'low-prices', scanPollTimer;
+let categories = [], analysisCategories = [], currentItems = [], activePeriod = 30, activeView = 'low-prices', scanPollTimer, automationPollTimer;
 let bestSellerCategoryId = 'featured', reviewRadarCategoryId = 'featured';
 let analysisRuns = {};
 
@@ -67,6 +69,59 @@ async function updateLowPriceRunIndicator() {
             lastUpdateStatus.textContent = `Saatlik tam tarama sürüyor: ${status.completed || 0}/${status.total || '?'} kategori · ${status.currentCategory || 'hazırlanıyor'}`;
         }
     } catch (_) { /* Durum bilgisi alınamazsa son tamamlanan kayıt gösterilir. */ }
+}
+
+const sourceLabels = {
+    'low-prices': 'Düşük Fiyat Radarı',
+    'best-sellers': 'Amazon Çok Satanlar',
+    'review-radar': 'Amazon Yorum Radarı',
+    deals: 'Amazon Fırsatları'
+};
+
+function showAutomationOverlay(status) {
+    const running = status?.status === 'running';
+    scanOverlay.hidden = !running;
+    document.body.classList.toggle('app-locked', running);
+    if (!running) return;
+
+    const label = sourceLabels[status.source] || 'PİNTİ analizi';
+    const totalSteps = Math.max(Number(status.total) || 1, 1);
+    const completedSteps = Math.max(Number(status.step) || 0, 0);
+    const low = status.lowPriceProgress;
+    let percent = (completedSteps / totalSteps) * 100;
+    let progressText = `${Math.min(completedSteps + 1, totalSteps)}/${totalSteps} radar sırasıyla analiz ediliyor`;
+
+    if (status.source === 'low-prices' && low?.total) {
+        const categoryRatio = Math.min(Number(low.completed || 0) / Number(low.total), 1);
+        percent = ((completedSteps + categoryRatio) / totalSteps) * 100;
+        progressText = `${low.completed || 0}/${low.total} kategori · ${low.currentCategory || 'hazırlanıyor'}`;
+    } else if (status.mode === 'low-price-manual' && status.categoryTotal) {
+        percent = Math.min((Number(status.completed || 0) / Number(status.categoryTotal)) * 100, 96);
+        progressText = `${status.completed || 0}/${status.categoryTotal} kategori · ${status.currentCategory || 'hazırlanıyor'}`;
+    } else {
+        percent = Math.min(Math.max(percent + 8, 8), 92);
+    }
+
+    overlayTitle.textContent = `${label} güncelleniyor`;
+    overlayProgress.textContent = progressText;
+    overlayProgressBar.style.width = `${Math.max(4, Math.min(percent, 98))}%`;
+    overlayProgressBar.parentElement.setAttribute('aria-valuenow', String(Math.round(percent)));
+    overlayStage.textContent = `Şu an: ${label}`;
+}
+
+async function pollAutomationStatus() {
+    try {
+        const response = await fetch('/api/automation/status', { cache: 'no-store' });
+        const status = await response.json();
+        if (!response.ok) throw new Error(status.error || 'Tarama durumu alınamadı.');
+        showAutomationOverlay(status);
+        if (status.status === 'running') await refreshActiveDashboard();
+    } catch (error) {
+        console.warn(`Otomasyon durumu alınamadı: ${error.message}`);
+    } finally {
+        clearTimeout(automationPollTimer);
+        automationPollTimer = setTimeout(pollAutomationStatus, 2500);
+    }
 }
 
 function alarmButton(item, source) {
@@ -421,4 +476,5 @@ async function refreshActiveDashboard() {
 }
 
 setInterval(refreshActiveDashboard, 60000);
+pollAutomationStatus();
 loadCategories();

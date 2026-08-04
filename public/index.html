@@ -79,13 +79,16 @@
     </main>
     <div id="scanOverlay" class="scan-overlay" aria-live="polite" aria-busy="true" hidden>
         <section class="scan-dialog">
-            <div class="scan-spinner" aria-hidden="true"></div>
+            <div class="scan-orb" aria-hidden="true"><span></span></div>
             <div>
                 <p class="eyebrow">ARKA PLAN TARAMASI</p>
                 <h2 id="overlayTitle">Amazon verileri hazırlanıyor</h2>
                 <p id="overlayProgress">Tarama kuyruğu oluşturuluyor…</p>
             </div>
-            <div id="scanLogs" class="scan-logs"></div>
+            <div class="scan-progress-track" role="progressbar" aria-label="Tarama ilerlemesi" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span id="overlayProgressBar"></span></div>
+            <div id="overlayStage" class="scan-stage">Hazırlanıyor</div>
+            <p class="pinti-working"><strong>PİNTİ çalışıyor</strong><span>Tarama tamamlanana kadar uygulama geçici olarak kilitli.</span></p>
+            <div id="scanLogs" hidden></div>
         </section>
     </div>
     <div id="priceChartOverlay" class="chart-overlay" role="dialog" aria-modal="true" aria-labelledby="priceChartTitle" hidden>

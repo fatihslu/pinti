@@ -18,6 +18,7 @@ class PriceTracker {
         this.advancedScraper = null;
         this.usePuppeteer = AdvancedScraper !== null && process.env.USE_PUPPETEER !== 'false';
         this.hourlyAnalysisRunning = false;
+        this.hourlyAnalysisStatus = { status: 'idle', source: null, step: 0, total: 4, startedAt: null, finishedAt: null, lowPriceProgress: null };
         this.lowPriceCategoriesCache = null;
         this.lowPriceCategoriesCacheUntil = 0;
     }
@@ -294,23 +295,38 @@ class PriceTracker {
             return false;
         }
         this.hourlyAnalysisRunning = true;
+        this.hourlyAnalysisStatus = { status: 'running', source: 'low-prices', step: 0, total: 4, startedAt: new Date().toISOString(), finishedAt: null, lowPriceProgress: null };
         const run = async (source, task) => {
+            this.hourlyAnalysisStatus.source = source;
             try { await task(); }
             catch (error) {
                 console.warn(`${source} saatlik taraması başarısız: ${error.message}`);
                 await this.recordRun(source, 0, 0, error.message);
+            } finally {
+                this.hourlyAnalysisStatus.step++;
             }
         };
         try {
             // Aynı Chrome oturumuna eşzamanlı yük bindirmemek için radarlar sırayla çalışır.
-            await run('low-prices', () => this.refreshAllAmazonLowPriceCategories());
+            await run('low-prices', () => this.refreshAllAmazonLowPriceCategories(progress => {
+                this.hourlyAnalysisStatus.lowPriceProgress = {
+                    completed: progress.completed || 0,
+                    total: progress.total || 0,
+                    currentCategory: progress.category?.name || null
+                };
+            }));
             await run('best-sellers', () => this.refreshAmazonBestSellers());
             await run('review-radar', () => this.refreshAmazonReviewRadar());
             await run('deals', () => this.refreshAmazonDeals());
         } finally {
             this.hourlyAnalysisRunning = false;
+            this.hourlyAnalysisStatus = { ...this.hourlyAnalysisStatus, status: 'completed', source: null, finishedAt: new Date().toISOString() };
         }
         return true;
+    }
+
+    getHourlyAnalysisStatus() {
+        return { ...this.hourlyAnalysisStatus, lowPriceProgress: this.hourlyAnalysisStatus.lowPriceProgress && { ...this.hourlyAnalysisStatus.lowPriceProgress } };
     }
 
     async runMissedHourlyAnalyses() {

@@ -176,6 +176,27 @@ app.get('/api/amazon/analysis-runs', async (req, res) => {
     catch (error) { res.status(500).json({ error: error.message }); }
 });
 
+// Arayüz, hangi sekme açık olursa olsun bu ortak durumla tam ekran çalışma perdesini gösterir.
+app.get('/api/automation/status', async (req, res) => {
+    try {
+        const hourly = tracker.getHourlyAnalysisStatus();
+        if (hourly.status === 'running') return res.json({ mode: 'hourly', ...hourly });
+        if (lowPriceFullScan.status === 'running') return res.json({
+            status: 'running', mode: 'low-price-manual', source: 'low-prices', step: 0, total: 1,
+            startedAt: lowPriceFullScan.startedAt, completed: lowPriceFullScan.completed,
+            categoryTotal: lowPriceFullScan.total, currentCategory: lowPriceFullScan.currentCategory
+        });
+        if (reviewRadarScan.status === 'running') return res.json({
+            status: 'running', mode: 'review-manual', source: 'review-radar', step: 0, total: 1,
+            startedAt: reviewRadarScan.startedAt
+        });
+        const running = (await db.getLatestAnalysisRuns()).find(run => run.status === 'running');
+        return res.json(running
+            ? { status: 'running', mode: 'single', source: running.source, step: 0, total: 1, startedAt: running.started_at }
+            : { status: 'idle' });
+    } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
 app.get('/api/amazon/price-history', async (req, res) => {
     try {
         const allowedSources = new Set(['low-prices', 'deals', 'best-sellers', 'review-radar']);
