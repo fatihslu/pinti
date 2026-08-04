@@ -9,9 +9,12 @@ from __future__ import annotations
 import os
 import sqlite3
 import secrets
+import threading
+import uuid
 from pathlib import Path
 from functools import wraps
 from flask import Flask, jsonify, request, redirect, session, url_for, render_template_string
+from amazon_collector import AmazonCollector, AmazonCollectionError, Category
 
 ROOT = Path(__file__).resolve().parent
 DATABASE = Path(os.environ.get("PINTI_DATABASE", ROOT / "price_tracker.db"))
@@ -123,6 +126,130 @@ def ensure_alerts_table():
 
 ensure_schema()
 
+collector = AmazonCollector()
+low_price_scan = {"status": "idle", "startedAt": None, "finishedAt": None, "total": 0, "completed": 0,
+                  "savedCount": 0, "currentCategory": None, "failures": [], "logs": []}
+review_radar_scan = {"status": "idle", "startedAt": None, "finishedAt": None, "count": 0, "error": None}
+scan_lock = threading.Lock()
+
+
+def timestamp():
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).isoformat()
+
+
+def category_for(category_id: str) -> Category:
+    match = next((category for category in ANALYSIS_CATEGORIES if category["id"] == category_id), None)
+    if not match:
+        raise ValueError("Kategori bulunamadı.")
+    return Category(match["id"], match["name"], match["url"])
+
+
+def store_best_sellers(category: Category, items: list[dict]) -> None:
+    batch_id = uuid.uuid4().hex
+    with db() as connection:
+        connection.executemany("""INSERT INTO amazon_bestseller_snapshots
+            (batch_id,rank,title,price,category_id,category_name,product_url,image_url)
+            VALUES (?,?,?,?,?,?,?,?)""", [
+                (batch_id, item["rank"], item["title"], item["price"], category.id, category.name,
+                 item["product_url"], item.get("image_url")) for item in items
+            ])
+
+
+def store_review_radar(category: Category, items: list[dict]) -> None:
+    batch_id = uuid.uuid4().hex
+    with db() as connection:
+        connection.executemany("""INSERT INTO amazon_review_radar_snapshots
+            (batch_id,asin,title,price,category_id,category_name,rating,review_count,image_url,product_url)
+            VALUES (?,?,?,?,?,?,?,?,?,?)""", [
+                (batch_id, item["asin"], item["title"], item.get("price"), category.id, category.name,
+                 item["rating"], item["review_count"], item.get("image_url"), item["product_url"])
+                for item in items
+            ])
+
+
+def store_low_prices(category: Category, items: list[dict]) -> None:
+    batch_id = uuid.uuid4().hex
+    with db() as connection:
+        connection.executemany("""INSERT INTO amazon_low_price_snapshots
+            (batch_id,category_id,category_name,low_price_period,asin,position,title,price,original_price,
+             discount_percent,monthly_sales_minimum,monthly_sales_text,review_count,rating,product_url,image_url)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", [
+                (batch_id, category.id, category.name, item["low_price_period"], item["asin"], item["position"],
+                 item["title"], item["price"], item.get("original_price"), item["discount_percent"],
+                 item.get("monthly_sales_minimum"), item.get("monthly_sales_text"), item.get("review_count"),
+                 item.get("rating"), item["product_url"], item.get("image_url")) for item in items
+            ])
+
+
+def refresh_low_prices(category: Category) -> list[dict]:
+    items = collector.low_prices(category)
+    store_low_prices(category, items)
+    return items
+
+
+def append_low_price_log(message: str) -> None:
+    low_price_scan["logs"].append({"at": timestamp(), "message": message})
+    low_price_scan["logs"] = low_price_scan["logs"][-120:]
+
+
+def run_full_low_price_scan() -> None:
+    try:
+        categories = collector.low_price_categories()
+        low_price_scan.update(total=len(categories))
+        for category in categories:
+            low_price_scan["currentCategory"] = category.name
+            try:
+                items = refresh_low_prices(category)
+                low_price_scan["completed"] += 1
+                low_price_scan["savedCount"] += len(items)
+                append_low_price_log(f"{category.name}: {len(items)} ürün kaydedildi.")
+            except AmazonCollectionError as error:
+                low_price_scan["completed"] += 1
+                low_price_scan["failures"].append({"category": category.name, "error": str(error)})
+                append_low_price_log(f"{category.name}: {error}")
+        low_price_scan.update(status="completed", currentCategory=None, finishedAt=timestamp())
+    except Exception as error:
+        low_price_scan.update(status="failed", currentCategory=None, finishedAt=timestamp(), error=str(error))
+        append_low_price_log(f"Tarama durdu: {error}")
+    finally:
+        scan_lock.release()
+
+
+def start_full_low_price_scan() -> bool:
+    if not scan_lock.acquire(blocking=False):
+        return False
+    low_price_scan.update(status="running", startedAt=timestamp(), finishedAt=None, total=0, completed=0,
+                          savedCount=0, currentCategory=None, failures=[], logs=[])
+    append_low_price_log("Tam kategori taraması başlatıldı.")
+    threading.Thread(target=run_full_low_price_scan, daemon=True).start()
+    return True
+
+
+def start_review_radar_scan(category: Category) -> bool:
+    if review_radar_scan["status"] == "running":
+        return False
+    review_radar_scan.update(status="running", startedAt=timestamp(), finishedAt=None, count=0, error=None)
+
+    def work():
+        try:
+            items = collector.review_radar(category)
+            store_review_radar(category, items)
+            review_radar_scan.update(status="completed", finishedAt=timestamp(), count=len(items))
+        except Exception as error:
+            review_radar_scan.update(status="failed", finishedAt=timestamp(), error=str(error))
+
+    threading.Thread(target=work, daemon=True).start()
+    return True
+
+
+def run_scheduled_collection() -> None:
+    """Entry point for a PythonAnywhere Task; performs the hourly collection."""
+    if not start_full_low_price_scan():
+        return
+    while low_price_scan["status"] == "running":
+        threading.Event().wait(1)
+
 
 def logged_in():
     return session.get("pinti_authenticated") is True
@@ -216,6 +343,19 @@ def best_sellers():
     return jsonify(rows(sql, (category_id, category_id)))
 
 
+@app.post("/api/amazon/best-sellers/refresh")
+@login_required
+def refresh_best_sellers():
+    try:
+        payload = request.get_json(silent=True) or {}
+        category = category_for(payload.get("categoryId", "featured"))
+        items = collector.best_sellers(category)
+        store_best_sellers(category, items)
+        return jsonify(success=True, category={"id": category.id, "name": category.name}, products=items)
+    except (ValueError, AmazonCollectionError) as error:
+        return jsonify(error=str(error)), 422
+
+
 @app.get("/api/amazon/review-radar")
 @login_required
 def review_radar():
@@ -227,19 +367,42 @@ def review_radar():
     return jsonify(rows(sql, (category_id, category_id)))
 
 
+@app.post("/api/amazon/review-radar/refresh")
+@login_required
+def refresh_review_radar():
+    try:
+        payload = request.get_json(silent=True) or {}
+        category = category_for(payload.get("categoryId", "featured"))
+        started = start_review_radar_scan(category)
+        return jsonify(started=started, category={"id": category.id, "name": category.name}, **review_radar_scan), (202 if started else 200)
+    except ValueError as error:
+        return jsonify(error=str(error)), 400
+
+
+@app.get("/api/amazon/review-radar/scan-status")
+@login_required
+def review_radar_status():
+    return jsonify(review_radar_scan)
+
+
 @app.get("/api/amazon/low-prices/categories")
 @login_required
 def low_price_categories():
     stored = rows("SELECT DISTINCT category_id AS id, category_name AS name FROM amazon_low_price_snapshots ORDER BY name")
-    stored_ids = {category["id"] for category in stored}
-    # A new deployment has no snapshots yet. Keep the category selector usable
-    # and let the page display an empty list rather than a parsing error.
-    defaults = [
-        {"id": category["id"], "name": category["name"]}
-        for category in ANALYSIS_CATEGORIES
-        if category["id"] not in stored_ids
-    ]
-    return jsonify(defaults + stored)
+    return jsonify(stored or [{"id": "all", "name": "Tümü"}])
+
+
+@app.get("/api/amazon/low-prices/scan-status")
+@login_required
+def low_price_scan_status():
+    return jsonify(low_price_scan)
+
+
+@app.post("/api/amazon/low-prices/refresh-all")
+@login_required
+def refresh_all_low_prices():
+    started = start_full_low_price_scan()
+    return jsonify(started=started, **low_price_scan), (202 if started else 200)
 
 
 @app.get("/api/amazon/low-prices/<category_id>")
@@ -247,8 +410,24 @@ def low_price_categories():
 def low_prices(category_id):
     sql = """SELECT category_id,category_name,low_price_period,asin,position,title,price,original_price,discount_percent,
              monthly_sales_minimum,monthly_sales_text,review_count,rating,product_url,image_url,captured_at
-             FROM amazon_low_price_snapshots WHERE category_id=? ORDER BY low_price_period,position"""
-    return jsonify(rows(sql, (category_id,)))
+             FROM amazon_low_price_snapshots WHERE category_id=? AND id IN (
+                 SELECT MAX(id) FROM amazon_low_price_snapshots WHERE category_id=? GROUP BY asin,low_price_period
+             ) ORDER BY low_price_period,position"""
+    return jsonify(rows(sql, (category_id, category_id)))
+
+
+@app.post("/api/amazon/low-prices/<category_id>/refresh")
+@login_required
+def refresh_low_price_category(category_id):
+    try:
+        categories = {category.id: category for category in collector.low_price_categories()}
+        category = categories.get(category_id)
+        if not category:
+            return jsonify(error="Amazon sayfasında kategori bulunamadı. Önce tüm kategorileri tara."), 404
+        items = refresh_low_prices(category)
+        return jsonify(success=True, category={"id": category.id, "name": category.name}, products=items, saved=True, savedCount=len(items))
+    except AmazonCollectionError as error:
+        return jsonify(error=str(error)), 422
 
 
 @app.get("/api/alerts")

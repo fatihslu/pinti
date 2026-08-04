@@ -22,6 +22,13 @@ from flask_app import app as application
 
 5. Uygulamayı Reload et ve `/health` adresini aç.
 
-Not: PythonAnywhere web worker içinde sürekli zamanlayıcı çalıştırılmaz. Saatlik
-alarm işlemi, PythonAnywhere'in **Tasks** ekranındaki ayrı bir saatlik görevle
-çalıştırılmalıdır; bu görev için `run_hourly.py` eklenmeden yayına geçilmez.
+Not: PythonAnywhere web worker içinde sürekli zamanlayıcı çalıştırılmaz. **Tasks**
+ekranında aşağıdaki komutla saatlik bir görev oluştur:
+
+```bash
+cd /home/fatihslu/pinti && /home/fatihslu/.virtualenvs/pinti-env/bin/python run_hourly.py
+```
+
+Bu görev, düşük fiyat sayfasındaki kategorileri ve ürünleri kaydeder. Amazon bir
+doğrulama/CAPTCHA sayfası döndürürse uygulama bunu aşmayı denemez; görev logunda
+taramanın durduğu belirtilir.
