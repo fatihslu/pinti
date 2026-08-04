@@ -11,7 +11,9 @@ const PORT = process.env.PORT || 3001;
 // içe aktarım isteğini varsayılan 100 KB sınırının üstüne çıkarabilir.
 app.use(express.json({ limit: '3mb' }));
 app.use(express.urlencoded({ extended: true }));
-app.use(express.static('public'));
+// Görev Zamanlayıcı uygulamayı farklı bir çalışma klasöründen başlatabilir.
+// Statik arayüzün bu durumda da bulunması için yolu proje köküne sabitle.
+app.use(express.static(path.join(__dirname, 'public')));
 
 // Veritabanı ve fiyat takipçi başlat
 const db = new Database();

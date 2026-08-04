@@ -79,6 +79,11 @@ class AmazonCollector:
     def __init__(self, timeout: int = 25):
         self.timeout = timeout
         self.session = requests.Session()
+        # Some local Windows installations retain a stale corporate proxy in
+        # HTTP(S)_PROXY.  The collector makes direct public HTTPS requests, so
+        # inheriting that proxy would make every request fail before Amazon is
+        # contacted.
+        self.session.trust_env = False
         self.session.headers.update(HEADERS)
 
     def get_soup(self, url: str) -> BeautifulSoup:
