@@ -1,10 +1,22 @@
 const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
+const fs = require('fs');
 const crypto = require('crypto');
 
 class Database {
     constructor() {
-        this.db = new sqlite3.Database(path.join(__dirname, 'price_tracker.db'), (err) => {
+        // Tek dosyalık Windows uygulamasında __dirname paket içindeki salt-okunur
+        // alandır. Veriler kullanıcının LocalAppData dizininde kalıcı tutulur.
+        const dataDirectory = process.pkg
+            ? path.join(process.env.LOCALAPPDATA || path.dirname(process.execPath), 'PINTI')
+            : __dirname;
+        if (!fs.existsSync(dataDirectory)) fs.mkdirSync(dataDirectory, { recursive: true });
+        const databasePath = path.join(dataDirectory, 'price_tracker.db');
+        if (process.pkg && !fs.existsSync(databasePath)) {
+            const bundledDatabase = path.join(__dirname, 'price_tracker.db');
+            if (fs.existsSync(bundledDatabase)) fs.copyFileSync(bundledDatabase, databasePath);
+        }
+        this.db = new sqlite3.Database(databasePath, (err) => {
             if (err) {
                 console.error('Veritabanı bağlantı hatası:', err);
             } else {
