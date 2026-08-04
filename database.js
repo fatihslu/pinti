@@ -440,7 +440,7 @@ class Database {
         });
     }
 
-    getLatestAmazonDeals(limit = 24) {
+    getLatestAmazonDeals(limit = 600) {
         return new Promise((resolve, reject) => {
             const sql = `SELECT asin, position, title, price, original_price, discount_percent, review_count, rating, monthly_sales_minimum, monthly_sales_text, product_url, image_url, captured_at
                          FROM amazon_deal_snapshots

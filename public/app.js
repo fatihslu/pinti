@@ -113,6 +113,68 @@ async function loadBestSellers() {
     render(); scanStatus.textContent = `${items.length} Çok Satanlar ürünü gösteriliyor.`;
 }
 
+function dealCard(item) {
+    const discount = Number(item.discount_percent || 0);
+    const sales = item.monthly_sales_minimum == null ? 'Sat\u0131\u015f etiketi yok' : `Ge\u00e7en ay \u2265${Number(item.monthly_sales_minimum).toLocaleString('tr-TR')} sat\u0131\u015f`;
+    return `<div class="product-with-alert"><a class="summary-product" href="${escapeHtml(item.product_url || '#')}" target="_blank" rel="noopener">
+        <img src="${escapeHtml(item.image_url || '')}" alt=""><div>
+        <div class="product-title">${escapeHtml(item.title)}</div>
+        <div class="price-row">${price(item.price)}${discount ? `<span class="discount">%${discount} indirim</span>` : ''}</div>
+        ${item.original_price ? `<span class="old-price">\u00d6nceki: ${price(item.original_price)}</span>` : ''}
+        <span class="meta ${item.monthly_sales_minimum == null ? '' : 'sales'}">${sales}</span>
+        <span class="meta">Amazon F\u0131rsatlar\u0131</span>
+        </div></a>${alarmButton(item, 'deals')}</div>`;
+}
+
+async function loadDeals() {
+    const response = await fetch('/api/amazon/deals');
+    const items = await response.json();
+    if (!response.ok) throw new Error(items.error || 'F\u0131rsat kayd\u0131 al\u0131namad\u0131.');
+    const render = () => {
+        const min = Number(document.getElementById('dealMinPrice')?.value || 0);
+        const max = Number(document.getElementById('dealMaxPrice')?.value || Infinity);
+        const minDiscount = Number(document.getElementById('dealMinDiscount')?.value || 0);
+        const minSales = Number(document.getElementById('dealMinSales')?.value || 0);
+        const sales = item => item.monthly_sales_minimum == null ? null : Number(item.monthly_sales_minimum);
+        const sort = document.getElementById('dealSort')?.value || 'price-asc';
+        const compare = {
+            'price-asc': (a, b) => Number(a.price) - Number(b.price),
+            'price-desc': (a, b) => Number(b.price) - Number(a.price),
+            'discount-desc': (a, b) => Number(b.discount_percent || 0) - Number(a.discount_percent || 0) || Number(a.price) - Number(b.price),
+            'sales-desc': (a, b) => (sales(b) ?? -1) - (sales(a) ?? -1) || Number(b.discount_percent || 0) - Number(a.discount_percent || 0)
+        }[sort];
+        const filtered = items
+            .filter(item => Number(item.price) >= min && Number(item.price) <= max)
+            .filter(item => Number(item.discount_percent || 0) >= minDiscount)
+            .filter(item => minSales <= 0 || (sales(item) !== null && sales(item) >= minSales))
+            .sort(compare);
+        document.getElementById('dealList').innerHTML = filtered.length
+            ? filtered.map(dealCard).join('')
+            : '<div class="empty-state">Bu filtrede \u00fcr\u00fcn yok.</div>';
+        wireAlertButtons();
+    };
+    summary.innerHTML = `<article class="summary-card full-width"><h2>Amazon F\u0131rsatlar\u0131</h2><p>Amazon Deals sayfas\u0131ndaki eri\u015filebilen koleksiyonlar birle\u015ftirilerek listelenir. Tarama, sekme a\u00e7\u0131ld\u0131\u011f\u0131nda otomatik ba\u015flamaz.</p><section class="filter-panel"><label>Minimum fiyat <input id="dealMinPrice" type="number" min="0" value="0"></label><label>Maksimum fiyat <input id="dealMaxPrice" type="number" min="0" placeholder="S\u0131n\u0131rs\u0131z"></label><label>En az indirim <input id="dealMinDiscount" type="number" min="0" max="100" value="0"></label><label>En az sat\u0131\u015f <input id="dealMinSales" type="number" min="0" value="0"></label><label>S\u0131ralama <select id="dealSort"><option value="price-asc">Fiyat: d\u00fc\u015f\u00fckten y\u00fckse\u011fe</option><option value="price-desc">Fiyat: y\u00fcksekten d\u00fc\u015f\u00fc\u011fe</option><option value="discount-desc">\u0130ndirim: y\u00fcksekten d\u00fc\u015f\u00fc\u011fe</option><option value="sales-desc">Sat\u0131\u015f: y\u00fcksekten d\u00fc\u015f\u00fc\u011fe</option></select></label><button id="dealRefresh" class="primary">T\u00fcm f\u0131rsatlar\u0131 tara</button></section><div id="dealList" class="product-list"></div></article>`;
+    ['dealMinPrice', 'dealMaxPrice', 'dealMinDiscount', 'dealMinSales', 'dealSort'].forEach(id => {
+        document.getElementById(id).addEventListener('input', render);
+        document.getElementById(id).addEventListener('change', render);
+    });
+    document.getElementById('dealRefresh').addEventListener('click', () => (async () => {
+        const refresh = document.getElementById('dealRefresh');
+        refresh.disabled = true;
+        scanStatus.textContent = 'Amazon F\u0131rsatlar\u0131 taran\u0131yor; koleksiyonlar birle\u015ftiriliyor\u2026';
+        try {
+            const result = await fetch('/api/amazon/deals/refresh', { method: 'POST' });
+            const data = await result.json();
+            if (!result.ok) throw new Error(data.error || 'F\u0131rsat taramas\u0131 ba\u015flat\u0131lamad\u0131.');
+            await loadDeals();
+        } finally {
+            refresh.disabled = false;
+        }
+    })().catch(error => { scanStatus.textContent = error.message; }));
+    render();
+    scanStatus.textContent = items.length ? `${items.length} Amazon F\u0131rsat\u0131 g\u00f6steriliyor.` : 'Hen\u00fcz f\u0131rsat kayd\u0131 yok. T\u00fcm f\u0131rsatlar\u0131 tara ile ba\u015flatabilirsin.';
+}
+
 function reviewCard(item, index) {
     return `<div class="product-with-alert"><a class="summary-product" href="${escapeHtml(item.product_url)}" target="_blank" rel="noopener">
         <img src="${escapeHtml(item.image_url || '')}" alt=""><div>
@@ -210,7 +272,7 @@ document.querySelectorAll('.source-tab').forEach(button => button.addEventListen
     activeView = button.dataset.view; document.querySelectorAll('.source-tab').forEach(tab => tab.classList.toggle('active', tab === button));
     viewTitle.textContent = button.textContent.trim();
     const low = activeView === 'low-prices'; controlsPanel.hidden = filterPanel.hidden = periodTabs.hidden = !low;
-    try { if (low) renderLowPrices(); else if (activeView === 'best-sellers') await loadBestSellers(); else if (activeView === 'review-radar') await loadReviewRadar(); else await loadAlerts(); } catch (error) { scanStatus.textContent = error.message; }
+    try { if (low) renderLowPrices(); else if (activeView === 'deals') await loadDeals(); else if (activeView === 'best-sellers') await loadBestSellers(); else if (activeView === 'review-radar') await loadReviewRadar(); else await loadAlerts(); } catch (error) { scanStatus.textContent = error.message; }
 }));
 categorySelect.addEventListener('change', () => loadSnapshot().catch(error => { scanStatus.textContent = error.message; }));
 refreshCategoryBtn.addEventListener('click', refreshCurrentCategory);

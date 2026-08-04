@@ -366,10 +366,10 @@ class AdvancedScraper {
         }
     }
 
-    async scrapeAmazonDeals(limit = 24) {
+    async scrapeAmazonDeals(limit = 600) {
         const browser = await this.initBrowser();
         const page = await browser.newPage();
-        const dealsPage = 'https://www.amazon.com.tr/b?node=219537826031';
+        const dealsPage = 'https://www.amazon.com.tr/deals/';
         try {
             await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36');
             await page.setViewport({ width: 1440, height: 1100 });
@@ -408,8 +408,61 @@ class AdvancedScraper {
                 });
             }, limit);
 
-            const validDeals = deals.filter(deal => deal.asin && deal.title && Number.isFinite(deal.price) && deal.price > 0 && deal.productUrl);
-            await this.enrichAmazonSalesSignals(validDeals);
+            // The landing view only renders one collection at a time. Visit every
+            // visible Deals collection and merge the cards by ASIN for a complete list.
+            const collections = await page.evaluate(() => [...document.querySelectorAll('[data-testid^="filter-bubble-deals-collection-"]')]
+                .map(button => ({ selector: `[data-testid="${button.getAttribute('data-testid')}"]`, name: (button.textContent || '').trim() }))
+                .filter(item => item.name));
+            const byAsin = new Map();
+            const addDeal = deal => {
+                if (!deal.asin || byAsin.has(deal.asin) || byAsin.size >= limit) return;
+                byAsin.set(deal.asin, { ...deal, position: byAsin.size + 1 });
+            };
+            deals.forEach(addDeal);
+
+            for (const collection of collections) {
+                if (byAsin.size >= limit) break;
+                try {
+                    await page.click(collection.selector);
+                    await page.waitForFunction(selector => document.querySelector(selector)?.getAttribute('aria-pressed') === 'true', { timeout: 6000 }, collection.selector);
+                    await page.waitForTimeout(850);
+                    if (isBlockedPage(await page.content())) throw new Error('Deals page requested verification.');
+                    const extraCards = await page.evaluate(maxItems => [...document.querySelectorAll('[data-testid="product-card"][data-asin]')]
+                        .slice(0, maxItems).map(card => {
+                            const prices = [...card.querySelectorAll('.a-price .a-offscreen')].map(node => node.textContent.trim()).filter(Boolean);
+                            const link = card.querySelector('a[data-testid="product-card-link"][href]')?.href || '';
+                            const image = card.querySelector('img');
+                            return {
+                                asin: card.getAttribute('data-asin'), title: image?.alt?.trim() || '', priceText: prices[0] || '',
+                                originalPriceText: prices[1] || '', discountText: card.innerText || '', productUrl: link,
+                                imageUrl: image?.currentSrc || image?.src || ''
+                            };
+                        }), limit - byAsin.size);
+                    for (const card of extraCards) {
+                        const currentPrice = extractPrice(card.priceText);
+                        const originalPrice = extractPrice(card.originalPriceText);
+                        const explicitDiscount = Number(String(card.discountText).match(/%(\d+)/)?.[1]) || 0;
+                        const computedDiscount = originalPrice > currentPrice ? Math.round((1 - currentPrice / originalPrice) * 100) : 0;
+                        addDeal({
+                            asin: card.asin, title: card.title, price: currentPrice,
+                            originalPrice: originalPrice > currentPrice ? originalPrice : null,
+                            discountPercent: explicitDiscount || computedDiscount,
+                            productUrl: card.productUrl, imageUrl: card.imageUrl, categoryName: collection.name
+                        });
+                    }
+                } catch (error) {
+                    console.warn(`Deals collection skipped (${collection.name}): ${error.message}`);
+                }
+            }
+
+            const validDeals = [...byAsin.values()].filter(deal => deal.asin && deal.title && Number.isFinite(deal.price) && deal.price > 0 && deal.productUrl);
+            await this.enrichAmazonSalesSignals(validDeals.slice(0, SALES_SIGNAL_DETAIL_LIMIT));
+            for (const item of validDeals.slice(SALES_SIGNAL_DETAIL_LIMIT)) {
+                item.reviewCount = null;
+                item.rating = null;
+                item.monthlySalesText = '';
+                item.monthlySalesMinimum = null;
+            }
             return validDeals;
         } finally {
             await page.close();

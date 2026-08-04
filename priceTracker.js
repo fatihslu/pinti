@@ -97,7 +97,7 @@ class PriceTracker {
 
     async refreshAmazonDeals() {
         if (!this.usePuppeteer) throw new Error('Amazon kampanya kolektörü için tarayıcı desteği etkin olmalı.');
-        const items = await (await this.getAdvancedScraper()).scrapeAmazonDeals(24);
+        const items = await (await this.getAdvancedScraper()).scrapeAmazonDeals(600);
         if (!items.length) throw new Error('Amazon kampanya sayfasından fiyatlı ürün alınamadı.');
         await this.db.saveAmazonDealSnapshot(items);
         console.log(`Amazon indirim vitrini anlık görüntüsü kaydedildi (${items.length} ürün).`);
