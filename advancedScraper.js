@@ -37,6 +37,7 @@ const AMAZON_LOW_PRICE_PAGE_URL = 'https://www.amazon.com.tr/b/?node=21953782603
 const LOW_PRICE_PAGE_SIZE = 90;
 const LOW_PRICE_PAGE_STEP = 30;
 const LOW_PRICE_MAX_START_INDEX = 3000;
+const LOW_PRICE_NAVIGATION_RETRIES = 3;
 const SALES_SIGNAL_DETAIL_LIMIT = 18;
 // Gerçek Chrome "User Data" kökünü Puppeteer ile açmak güvenilir değildir:
 // Chrome profili kilitli olabilir ve sürüm farkları başlatmayı engelleyebilir.
@@ -298,7 +299,19 @@ class AdvancedScraper {
             let consecutiveDuplicatePages = 0;
 
             for (let startIndex = 0; startIndex <= LOW_PRICE_MAX_START_INDEX && uniqueItems.size < limit; startIndex += LOW_PRICE_PAGE_STEP) {
-                await page.goto(buildAmazonLowPricePageUrl(category, startIndex), { waitUntil: 'domcontentloaded', timeout: 45000 });
+                const targetUrl = buildAmazonLowPricePageUrl(category, startIndex);
+                let navigationError;
+                for (let attempt = 1; attempt <= LOW_PRICE_NAVIGATION_RETRIES; attempt++) {
+                    try {
+                        await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+                        navigationError = null;
+                        break;
+                    } catch (error) {
+                        navigationError = error;
+                        if (attempt < LOW_PRICE_NAVIGATION_RETRIES) await page.waitForTimeout(1000 * attempt);
+                    }
+                }
+                if (navigationError) throw new Error(`${navigationError.message} (${LOW_PRICE_NAVIGATION_RETRIES} deneme)`);
                 await page.waitForTimeout(1200);
                 const html = await page.content();
                 if (isBlockedPage(html)) throw new Error('Amazon en düşük fiyatlar sayfası doğrulama istedi.');

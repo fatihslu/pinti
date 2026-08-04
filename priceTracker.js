@@ -200,20 +200,30 @@ class PriceTracker {
         const summary = { total: categories.length, completed: 0, changedCategories: 0, savedCount: 0, failures: [] };
         const priceChanges = [];
         let scannedItemCount = 0;
-        for (const category of categories) {
-            try {
-                const result = await this.refreshAmazonLowPriceCategory(category, { notify: false, recordRun: false });
-                summary.completed++;
-                if (result.saved) summary.changedCategories++;
-                summary.savedCount += result.savedCount;
-                scannedItemCount += result.items.length;
-                priceChanges.push(...(result.priceChanges || []));
-                onProgress({ ...summary, category, result, status: 'running' });
-            } catch (error) {
-                summary.completed++;
-                summary.failures.push({ category: category.name, error: error.message });
-                onProgress({ ...summary, category, status: 'running' });
+        let pendingCategories = [...categories];
+        for (let round = 1; round <= 2 && pendingCategories.length; round++) {
+            const retryQueue = [];
+            for (const category of pendingCategories) {
+                try {
+                    const result = await this.refreshAmazonLowPriceCategory(category, { notify: false, recordRun: false });
+                    summary.completed++;
+                    if (result.saved) summary.changedCategories++;
+                    summary.savedCount += result.savedCount;
+                    scannedItemCount += result.items.length;
+                    priceChanges.push(...(result.priceChanges || []));
+                    onProgress({ ...summary, category, result, status: 'running', round });
+                } catch (error) {
+                    if (round === 1) {
+                        retryQueue.push(category);
+                        onProgress({ ...summary, category, status: 'running', round, retrying: true, retryError: error.message });
+                    } else {
+                        summary.completed++;
+                        summary.failures.push({ category: category.name, error: error.message });
+                        onProgress({ ...summary, category, status: 'running', round });
+                    }
+                }
             }
+            pendingCategories = retryQueue;
         }
         await this.notifyPriceChanges('low-prices', priceChanges);
         await this.recordRun('low-prices', scannedItemCount, priceChanges.length);

@@ -58,6 +58,8 @@ function startFullLowPriceScan() {
             addLowPriceScanLog(progress.result.saved
                 ? `${progress.category.name}: ${progress.result.items.length} ürün tarandı, ${progress.result.savedCount} yeni/değişen kayıt kaydedildi.`
                 : `${progress.category.name}: ${progress.result.items.length} ürün tarandı, değişiklik bulunmadı.`);
+        } else if (progress.retrying) {
+            addLowPriceScanLog(`${progress.category.name}: ilk deneme başarısız, turun sonunda yeniden denenecek.`);
         } else if (progress.failures?.length) {
             const failure = progress.failures[progress.failures.length - 1];
             addLowPriceScanLog(`${failure.category}: tarama atlandı (${failure.error}).`);
