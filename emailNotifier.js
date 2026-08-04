@@ -2,6 +2,14 @@ let nodemailer = null;
 try { nodemailer = require('nodemailer'); } catch (_) { /* SMTP yapılandırılana kadar isteğe bağlıdır. */ }
 const config = require('./email.config');
 
+function resolveFrom(user) {
+    const configured = String(config.from || process.env.MAIL_FROM || '').trim();
+    // Yalnız görünen ad yazılırsa Gmail mesajı kabul etse bile teslimi güvenilir
+    // olmayabilir. Her zaman geçerli bir RFC adresi kullan.
+    if (!configured) return user;
+    return configured.includes('@') ? configured : `"${configured.replace(/"/g, '')}" <${user}>`;
+}
+
 async function sendAlertEmail(alert, price, reasons) {
     const host = config.host || process.env.SMTP_HOST;
     const user = config.user || process.env.SMTP_USER;
@@ -17,11 +25,12 @@ async function sendAlertEmail(alert, price, reasons) {
         auth: { user, pass }
     });
     await transport.sendMail({
-        from: config.from || process.env.MAIL_FROM || user,
+        from: resolveFrom(user),
         to: config.recipient || alert.email,
         subject: `PİNTİ alarmı: ${alert.title}`,
         text: `${alert.title}\nGüncel fiyat: ${Number(price).toLocaleString('tr-TR')} TL\nTetikleyici: ${reasons.join(', ')}\n${alert.product_url}`
     });
+    console.log(`Alarm e-postası gönderildi: ${alert.title}`);
     return true;
 }
 
@@ -47,11 +56,12 @@ async function sendPriceChangesEmail(sourceLabel, changes, recipient = 'faatihus
         change.productUrl
     ].join('\n'));
     await transport.sendMail({
-        from: config.from || process.env.MAIL_FROM || user,
+        from: resolveFrom(user),
         to: config.recipient || recipient,
         subject: `PİNTİ fiyat değişimi: ${sourceLabel} (${changes.length} ürün)`,
         text: `${sourceLabel} taramasında fiyatı değişen ürünler:\n\n${lines.join('\n\n')}`
     });
+    console.log(`Fiyat değişimi e-postası gönderildi: ${sourceLabel} (${changes.length} ürün).`);
     return true;
 }
 
