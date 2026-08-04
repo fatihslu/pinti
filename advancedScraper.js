@@ -495,6 +495,8 @@ class AdvancedScraper {
                 const result = await page.evaluate(() => {
                     const cards = [...document.querySelectorAll('[data-component-type="s-search-result"][data-asin], [data-asin][data-index]')];
                     const findCard = link => {
+                        const bestsellerCard = link.closest('.p13n-sc-uncoverable-faceout, .zg-grid-general-faceout, .zg-carousel-general-faceout, [id^="p13n-asin-index-"]');
+                        if (bestsellerCard) return bestsellerCard;
                         let node = link;
                         for (let depth = 0; node && depth < 8; depth += 1, node = node.parentElement) {
                             if (node.querySelector?.('.a-icon-alt') && /\b(?:TL|₺)\b/.test(node.innerText || '')) return node;
@@ -512,10 +514,11 @@ class AdvancedScraper {
                         const image = card.querySelector('img') || link.querySelector('img');
                         return {
                             asin, productUrl: url,
-                            title: read(card, ['h2 span', '[data-cy="title-recipe"] h2']) || image?.alt || link.textContent?.trim() || '',
-                            priceText: read(card, ['.a-price .a-offscreen']),
-                            ratingText: read(card, ['.a-icon-alt', '[data-cy="reviews-block"] .a-icon-alt']),
-                            reviewText: read(card, ['a[href*="#customerReviews"] span', 'a[href*="customerReviews"]', '.a-size-base.s-underline-text']),
+                            title: read(card, ['h2 span', '[data-cy="title-recipe"] h2', '[class*="p13n-sc-css-line-clamp"]']) || image?.alt || link.textContent?.trim() || '',
+                            // Best-seller pages use a different product-card structure than search results.
+                            priceText: read(card, ['.a-price .a-offscreen', '[class*="p13n-sc-price"]', '.a-color-price']),
+                            ratingText: read(card, ['.a-icon-alt', '[data-cy="reviews-block"] .a-icon-alt', '[aria-label*="yıldız"]']),
+                            reviewText: read(card, ['a[aria-label*="puan"] .a-size-small', '.a-icon-row .a-size-small', 'a[href*="#customerReviews"] span', 'a[href*="customerReviews"]', '.a-size-base.s-underline-text']),
                             imageUrl: image?.currentSrc || image?.src || ''
                         };
                     }).filter(Boolean);
