@@ -2,6 +2,7 @@ const categorySelect = document.getElementById('categorySelect');
 const refreshCategoryBtn = document.getElementById('refreshCategoryBtn');
 const refreshAllBtn = document.getElementById('refreshAllBtn');
 const scanStatus = document.getElementById('scanStatus');
+const lastUpdateStatus = document.getElementById('lastUpdateStatus');
 const summary = document.getElementById('summary');
 const scanOverlay = document.getElementById('scanOverlay');
 const overlayTitle = document.getElementById('overlayTitle');
@@ -40,6 +41,20 @@ function lastRunMarkup(source) {
         ? `${Number(run.item_count || 0)} ürün · ${Number(run.changed_count || 0)} fiyat değişimi`
         : `Hata: ${escapeHtml(run.error || 'Bilinmeyen hata')}`;
     return `<p class="last-run ${run.status === 'completed' ? '' : 'failed'}">Son çalışma: ${when} · ${detail}</p>`;
+}
+
+function updateLastUpdateStatus(source = activeView) {
+    const run = analysisRuns[source];
+    if (!run) {
+        lastUpdateStatus.textContent = source === 'alerts'
+            ? 'Son güncelleme: Alarmlar saatlik kontrol edilir.'
+            : 'Son güncelleme: Henüz tamamlanmış tarama yok.';
+        return;
+    }
+    const when = run.finished_at ? new Date(String(run.finished_at).replace(' ', 'T')).toLocaleString('tr-TR') : 'Devam ediyor';
+    lastUpdateStatus.textContent = run.status === 'completed'
+        ? `Son güncelleme: ${when} · ${Number(run.item_count || 0)} ürün · ${Number(run.changed_count || 0)} fiyat değişimi`
+        : `Son güncelleme başarısız: ${when} · ${run.error || 'Bilinmeyen hata'}`;
 }
 
 function alarmButton(item, source) {
@@ -152,6 +167,7 @@ function renderLowPrices() {
 async function loadSnapshot() {
     if (!categorySelect.value) return;
     await loadAnalysisRuns();
+    updateLastUpdateStatus('low-prices');
     const response = await fetch(`/api/amazon/low-prices/${encodeURIComponent(categorySelect.value)}`);
     const items = await response.json();
     if (!response.ok) throw new Error(items.error || 'Kayıt alınamadı');
@@ -174,6 +190,7 @@ function analysisCategoryOptions(selected) {
 
 async function loadBestSellers() {
     await loadAnalysisRuns();
+    updateLastUpdateStatus('best-sellers');
     await loadAnalysisCategories();
     const response = await fetch(`/api/amazon/best-sellers?categoryId=${encodeURIComponent(bestSellerCategoryId)}`);
     const items = await response.json();
@@ -206,6 +223,7 @@ function dealCard(item) {
 
 async function loadDeals() {
     await loadAnalysisRuns();
+    updateLastUpdateStatus('deals');
     const response = await fetch('/api/amazon/deals');
     const items = await response.json();
     if (!response.ok) throw new Error(items.error || 'F\u0131rsat kayd\u0131 al\u0131namad\u0131.');
@@ -266,6 +284,7 @@ function reviewCard(item, index) {
 
 async function loadReviewRadar() {
     await loadAnalysisRuns();
+    updateLastUpdateStatus('review-radar');
     await loadAnalysisCategories();
     const response = await fetch(`/api/amazon/review-radar?categoryId=${encodeURIComponent(reviewRadarCategoryId)}`);
     const items = await response.json();
@@ -353,6 +372,7 @@ async function refreshCurrentCategory() {
 document.querySelectorAll('.source-tab').forEach(button => button.addEventListener('click', async () => {
     activeView = button.dataset.view; document.querySelectorAll('.source-tab').forEach(tab => tab.classList.toggle('active', tab === button));
     viewTitle.textContent = button.textContent.trim();
+    updateLastUpdateStatus(activeView);
     const low = activeView === 'low-prices'; controlsPanel.hidden = filterPanel.hidden = periodTabs.hidden = !low;
     try { if (low) renderLowPrices(); else if (activeView === 'deals') await loadDeals(); else if (activeView === 'best-sellers') await loadBestSellers(); else if (activeView === 'review-radar') await loadReviewRadar(); else await loadAlerts(); } catch (error) { scanStatus.textContent = error.message; }
 }));

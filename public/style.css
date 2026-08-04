@@ -35,6 +35,7 @@ button:disabled, select:disabled { cursor:not-allowed; opacity:.55; }
 .filter-panel label { display:grid; gap:5px; color:#37475a; font-size:.77rem; font-weight:800; }
 .info-strip { display:flex; justify-content:space-between; gap:16px; margin:14px 0; padding:10px 13px; color:#3f4d5b; background:rgb(234 245 255 / 76%); border-left:4px solid var(--blue); border-radius:4px; font-size:.8rem; backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px); }
 .info-strip span:first-child { color:var(--ink); font-weight:800; }
+.last-update-status { color:#205070; font-weight:700; }
 .period-tabs { display:flex; gap:0; margin:25px 0 16px; border-bottom:1px solid #bbbfbf; }
 .period-tab { padding:11px 18px; color:#37475a; background:transparent; border-radius:3px 3px 0 0; border-bottom:3px solid transparent; }
 .period-tab:hover { background:#f3f3f3; }
