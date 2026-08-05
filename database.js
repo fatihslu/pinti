@@ -232,6 +232,22 @@ class Database {
                 )
             `);
 
+            // Her radar turunda değişen fiyatların e-posta ayarından bağımsız,
+            // saat saat görüntülenebilmesi için kalıcı değişim günlüğü.
+            this.db.run(`
+                CREATE TABLE IF NOT EXISTS price_change_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    batch_id TEXT NOT NULL,
+                    source TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    product_url TEXT,
+                    previous_price REAL NOT NULL,
+                    current_price REAL NOT NULL,
+                    detected_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            `);
+            this.db.run('CREATE INDEX IF NOT EXISTS idx_price_change_events_detected ON price_change_events(detected_at DESC, id DESC)');
+
             // Mevcut kurulumlarda tablo daha önce görselsiz oluşturulmuş olabilir.
             this.db.all('PRAGMA table_info(external_offers)', (error, columns) => {
                 if (!error && !columns.some(column => column.name === 'image_url')) {
@@ -591,6 +607,33 @@ class Database {
                          FROM analysis_runs
                          WHERE id IN (SELECT MAX(id) FROM analysis_runs GROUP BY source)`;
             this.db.all(sql, (error, rows) => error ? reject(error) : resolve(rows));
+        });
+    }
+
+    savePriceChangeEvents(source, changes) {
+        return new Promise((resolve, reject) => {
+            if (!changes?.length) return resolve({ batchId: null, count: 0 });
+            const batchId = `${source}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+            const statement = this.db.prepare(`INSERT INTO price_change_events
+                (batch_id, source, title, product_url, previous_price, current_price)
+                VALUES (?, ?, ?, ?, ?, ?)`);
+            this.db.serialize(() => {
+                for (const change of changes) {
+                    statement.run(batchId, source, change.title || 'Amazon ürünü', change.productUrl || null,
+                        Number(change.previousPrice), Number(change.currentPrice));
+                }
+                statement.finalize(error => error ? reject(error) : resolve({ batchId, count: changes.length }));
+            });
+        });
+    }
+
+    getPriceChangeEvents(limit = 1200) {
+        return new Promise((resolve, reject) => {
+            const safeLimit = Math.max(1, Math.min(Number(limit) || 1200, 5000));
+            this.db.all(`SELECT batch_id, source, title, product_url, previous_price, current_price, detected_at
+                         FROM price_change_events
+                         ORDER BY detected_at DESC, id DESC
+                         LIMIT ?`, [safeLimit], (error, rows) => error ? reject(error) : resolve(rows));
         });
     }
 

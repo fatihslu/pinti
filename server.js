@@ -176,6 +176,11 @@ app.get('/api/amazon/analysis-runs', async (req, res) => {
     catch (error) { res.status(500).json({ error: error.message }); }
 });
 
+app.get('/api/price-changes', async (req, res) => {
+    try { res.json(await db.getPriceChangeEvents(req.query.limit)); }
+    catch (error) { res.status(500).json({ error: error.message }); }
+});
+
 // Arayüz, hangi sekme açık olursa olsun bu ortak durumla tam ekran çalışma perdesini gösterir.
 app.get('/api/automation/status', async (req, res) => {
     try {

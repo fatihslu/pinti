@@ -56,6 +56,12 @@ class PriceTracker {
 
     async notifyPriceChanges(source, changes) {
         if (!changes.length) return false;
+        try {
+            await this.db.savePriceChangeEvents(source, changes);
+        } catch (error) {
+            // Değişim günlüğü yazılamasa bile e-posta denemesi ve tarama devam eder.
+            console.warn(`${source} fiyat değişimi günlüğe yazılamadı: ${error.message}`);
+        }
         const labels = {
             'low-prices': 'Düşük Fiyat Radarı',
             deals: 'Amazon Fırsatları',

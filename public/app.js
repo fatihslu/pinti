@@ -387,6 +387,30 @@ async function startReviewRadar() {
     try { await wait(); } catch (error) { scanStatus.textContent = error.message; }
 }
 
+async function loadPriceChanges() {
+    const response = await fetch('/api/price-changes?limit=1500');
+    const events = await response.json();
+    if (!response.ok) throw new Error(events.error || 'Fiyat değişimi günlüğü alınamadı.');
+
+    const groups = [];
+    for (const event of events) {
+        let group = groups.find(item => item.batchId === event.batch_id);
+        if (!group) {
+            group = { batchId: event.batch_id, source: event.source, detectedAt: event.detected_at, events: [] };
+            groups.push(group);
+        }
+        group.events.push(event);
+    }
+
+    summary.innerHTML = `<article class="summary-card full-width price-change-history"><h2>Fiyat Değişimleri</h2><p>Her taramada değişen ürünler kendi çalışma saati altında saklanır. E-posta gönderilemese bile bu kayıtlar kalıcıdır.</p>${groups.length ? groups.map(group => {
+        const when = sqliteUtcDate(group.detectedAt);
+        const heading = when ? `${when.toLocaleDateString('tr-TR')} · ${when.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' })} taraması` : 'Tarih bilinmiyor';
+        return `<section class="change-batch"><header><div><strong>${heading}</strong><span>${escapeHtml(sourceLabels[group.source] || group.source)}</span></div><b>${group.events.length} fiyat değişimi</b></header><div class="change-list">${group.events.map(event => `<article class="change-row"><div><a href="${escapeHtml(event.product_url || '#')}" target="_blank" rel="noopener">${escapeHtml(event.title)}</a><span>${escapeHtml(sourceLabels[event.source] || event.source)}</span></div><div class="change-prices"><del>${price(event.previous_price)}</del><strong>${price(event.current_price)}</strong></div></article>`).join('')}</div></section>`;
+    }).join('') : '<div class="empty-state">Henüz kaydedilmiş fiyat değişimi yok. İlk değişimden itibaren her tarama burada gruplanır.</div>'}</article>`;
+    scanStatus.textContent = events.length ? `${events.length} fiyat değişimi, ${groups.length} tarama altında listeleniyor.` : 'Henüz fiyat değişimi kaydı yok.';
+    lastUpdateStatus.textContent = 'Fiyat değişimleri her tarama tamamlandığında kaydedilir.';
+}
+
 async function loadAlerts() {
     const response = await fetch('/api/alerts'); const alerts = await response.json();
     if (!response.ok) throw new Error(alerts.error || 'Alarmlar alınamadı.');
@@ -442,7 +466,7 @@ document.querySelectorAll('.source-tab').forEach(button => button.addEventListen
     viewTitle.textContent = button.textContent.trim();
     updateLastUpdateStatus(activeView);
     const low = activeView === 'low-prices'; controlsPanel.hidden = filterPanel.hidden = periodTabs.hidden = !low;
-    try { if (low) renderLowPrices(); else if (activeView === 'deals') await loadDeals(); else if (activeView === 'best-sellers') await loadBestSellers(); else if (activeView === 'review-radar') await loadReviewRadar(); else await loadAlerts(); } catch (error) { scanStatus.textContent = error.message; }
+    try { if (low) renderLowPrices(); else if (activeView === 'deals') await loadDeals(); else if (activeView === 'best-sellers') await loadBestSellers(); else if (activeView === 'review-radar') await loadReviewRadar(); else if (activeView === 'price-changes') await loadPriceChanges(); else await loadAlerts(); } catch (error) { scanStatus.textContent = error.message; }
 }));
 categorySelect.addEventListener('change', () => loadSnapshot().catch(error => { scanStatus.textContent = error.message; }));
 refreshCategoryBtn.addEventListener('click', refreshCurrentCategory);
@@ -458,6 +482,10 @@ async function refreshActiveDashboard() {
     if (dashboardRefreshInFlight) return;
     dashboardRefreshInFlight = true;
     try {
+        if (activeView === 'price-changes') {
+            await loadPriceChanges();
+            return;
+        }
         const previousFinishedAt = analysisRuns[activeView]?.finished_at || '';
         await loadAnalysisRuns();
         updateLastUpdateStatus(activeView);
@@ -468,6 +496,7 @@ async function refreshActiveDashboard() {
         else if (activeView === 'deals') await loadDeals();
         else if (activeView === 'best-sellers') await loadBestSellers();
         else if (activeView === 'review-radar') await loadReviewRadar();
+        else if (activeView === 'price-changes') await loadPriceChanges();
     } catch (error) {
         console.warn(`Pano güncellenemedi: ${error.message}`);
     } finally {

@@ -63,6 +63,21 @@ button:disabled, select:disabled { cursor:not-allowed; opacity:.55; }
 .alert-row { display:flex; justify-content:space-between; gap:16px; padding:13px; background:#fff; border:1px solid var(--line); border-radius:4px; }
 .alert-row strong, .alert-row span { display:block; }
 .alert-row span { margin-top:3px; color:var(--muted); font-size:.82rem; }
+.price-change-history > p { margin:0 0 16px; color:var(--muted); }
+.change-batch { margin-top:13px; overflow:hidden; background:rgb(255 255 255 / 72%); border:1px solid var(--line); border-radius:6px; }
+.change-batch header { display:flex; justify-content:space-between; align-items:center; gap:14px; padding:11px 13px; color:#fff; background:linear-gradient(90deg, var(--navy), #3a536a); }
+.change-batch header strong, .change-batch header span { display:block; }
+.change-batch header span { margin-top:2px; color:#c8d5df; font-size:.76rem; }
+.change-batch header b { padding:4px 7px; color:#161e2d; background:var(--yellow); border-radius:3px; font-size:.78rem; white-space:nowrap; }
+.change-list { padding:0 13px; }
+.change-row { display:flex; justify-content:space-between; align-items:center; gap:16px; padding:11px 0; border-bottom:1px solid #eaeded; }
+.change-row:last-child { border-bottom:0; }
+.change-row a { color:#007185; font-weight:800; text-decoration:none; }
+.change-row a:hover { color:#c7511f; text-decoration:underline; }
+.change-row span { display:block; margin-top:3px; color:var(--muted); font-size:.76rem; }
+.change-prices { display:flex; flex-direction:column; align-items:flex-end; gap:3px; white-space:nowrap; }
+.change-prices del { color:#7c8790; font-size:.82rem; }
+.change-prices strong { color:var(--price); font-size:.95rem; }
 .delete-alert { align-self:center; color:#a41c00; background:#fff0ee; border:1px solid #f0b5aa; }
 .summary-product img { width:82px; height:82px; padding:4px; object-fit:contain; background:#fff; border:1px solid #eaeded; border-radius:3px; }
 .product-title { display:-webkit-box; margin-bottom:6px; overflow:hidden; color:#007185; font-weight:700; font-size:.87rem; -webkit-box-orient:vertical; -webkit-line-clamp:2; }
