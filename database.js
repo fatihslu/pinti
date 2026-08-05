@@ -243,10 +243,21 @@ class Database {
                     product_url TEXT,
                     previous_price REAL NOT NULL,
                     current_price REAL NOT NULL,
+                    email_status TEXT NOT NULL DEFAULT 'pending',
+                    email_error TEXT,
+                    email_attempts INTEGER NOT NULL DEFAULT 0,
+                    email_sent_at DATETIME,
                     detected_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
             `);
             this.db.run('CREATE INDEX IF NOT EXISTS idx_price_change_events_detected ON price_change_events(detected_at DESC, id DESC)');
+            this.db.all('PRAGMA table_info(price_change_events)', (error, columns) => {
+                if (error) return;
+                if (!columns.some(column => column.name === 'email_status')) this.db.run("ALTER TABLE price_change_events ADD COLUMN email_status TEXT NOT NULL DEFAULT 'pending'");
+                if (!columns.some(column => column.name === 'email_error')) this.db.run('ALTER TABLE price_change_events ADD COLUMN email_error TEXT');
+                if (!columns.some(column => column.name === 'email_attempts')) this.db.run("ALTER TABLE price_change_events ADD COLUMN email_attempts INTEGER NOT NULL DEFAULT 0");
+                if (!columns.some(column => column.name === 'email_sent_at')) this.db.run('ALTER TABLE price_change_events ADD COLUMN email_sent_at DATETIME');
+            });
 
             // Mevcut kurulumlarda tablo daha önce görselsiz oluşturulmuş olabilir.
             this.db.all('PRAGMA table_info(external_offers)', (error, columns) => {
@@ -630,10 +641,39 @@ class Database {
     getPriceChangeEvents(limit = 1200) {
         return new Promise((resolve, reject) => {
             const safeLimit = Math.max(1, Math.min(Number(limit) || 1200, 5000));
-            this.db.all(`SELECT batch_id, source, title, product_url, previous_price, current_price, detected_at
+            this.db.all(`SELECT batch_id, source, title, product_url, previous_price, current_price, email_status, email_error, email_attempts, email_sent_at, detected_at
                          FROM price_change_events
                          ORDER BY detected_at DESC, id DESC
                          LIMIT ?`, [safeLimit], (error, rows) => error ? reject(error) : resolve(rows));
+        });
+    }
+
+    markPriceChangeBatchEmail(batchId, { sent, error = null } = {}) {
+        return new Promise((resolve, reject) => {
+            const sql = `UPDATE price_change_events
+                         SET email_status = ?, email_error = ?, email_attempts = email_attempts + 1,
+                             email_sent_at = CASE WHEN ? THEN CURRENT_TIMESTAMP ELSE email_sent_at END
+                         WHERE batch_id = ?`;
+            this.db.run(sql, [sent ? 'sent' : 'failed', error, sent ? 1 : 0, batchId], runError => runError ? reject(runError) : resolve());
+        });
+    }
+
+    getPendingPriceChangeBatches(limit = 20) {
+        return new Promise((resolve, reject) => {
+            const safeLimit = Math.max(1, Math.min(Number(limit) || 20, 100));
+            const sql = `WITH batches AS (
+                            SELECT batch_id, MAX(id) AS latest_id
+                            FROM price_change_events
+                            WHERE email_status != 'sent'
+                            GROUP BY batch_id
+                            ORDER BY latest_id ASC
+                            LIMIT ?
+                        )
+                        SELECT e.batch_id, e.source, e.title, e.product_url, e.previous_price, e.current_price
+                        FROM price_change_events e
+                        JOIN batches b ON b.batch_id = e.batch_id
+                        ORDER BY b.latest_id ASC, e.id ASC`;
+            this.db.all(sql, [safeLimit], (error, rows) => error ? reject(error) : resolve(rows));
         });
     }
 

@@ -56,8 +56,10 @@ class PriceTracker {
 
     async notifyPriceChanges(source, changes) {
         if (!changes.length) return false;
+        let savedBatchId = null;
         try {
-            await this.db.savePriceChangeEvents(source, changes);
+            const saved = await this.db.savePriceChangeEvents(source, changes);
+            savedBatchId = saved.batchId;
         } catch (error) {
             // Değişim günlüğü yazılamasa bile e-posta denemesi ve tarama devam eder.
             console.warn(`${source} fiyat değişimi günlüğe yazılamadı: ${error.message}`);
@@ -68,11 +70,42 @@ class PriceTracker {
             'best-sellers': 'Amazon Çok Satanlar',
             'review-radar': 'Amazon Yorum Radarı'
         };
-        try { return await sendPriceChangesEmail(labels[source] || source, changes); }
+        try {
+            const sent = await sendPriceChangesEmail(labels[source] || source, changes);
+            if (savedBatchId) await this.db.markPriceChangeBatchEmail(savedBatchId, { sent });
+            return sent;
+        }
         catch (error) {
+            if (savedBatchId) {
+                try { await this.db.markPriceChangeBatchEmail(savedBatchId, { sent: false, error: error.message }); }
+                catch (markError) { console.warn(`${source} e-posta durumu kaydedilemedi: ${markError.message}`); }
+            }
             console.warn(`${source} fiyat değişim e-postası gönderilemedi: ${error.message}`);
             return false;
         }
+    }
+
+    async retryPendingPriceChangeEmails() {
+        if (typeof this.db.getPendingPriceChangeBatches !== 'function') return 0;
+        const rows = await this.db.getPendingPriceChangeBatches(20);
+        const batches = new Map();
+        for (const row of rows) {
+            if (!batches.has(row.batch_id)) batches.set(row.batch_id, { source: row.source, changes: [] });
+            batches.get(row.batch_id).changes.push({ title: row.title, previousPrice: row.previous_price, currentPrice: row.current_price, productUrl: row.product_url });
+        }
+        let delivered = 0;
+        const labels = { 'low-prices': 'Düşük Fiyat Radarı', deals: 'Amazon Fırsatları', 'best-sellers': 'Amazon Çok Satanlar', 'review-radar': 'Amazon Yorum Radarı' };
+        for (const [batchId, batch] of batches) {
+            try {
+                const sent = await sendPriceChangesEmail(labels[batch.source] || batch.source, batch.changes);
+                await this.db.markPriceChangeBatchEmail(batchId, { sent });
+                if (sent) delivered++;
+            } catch (error) {
+                await this.db.markPriceChangeBatchEmail(batchId, { sent: false, error: error.message });
+                console.warn(`${batch.source} bekleyen e-posta gönderilemedi: ${error.message}`);
+            }
+        }
+        return delivered;
     }
 
     async recordRun(source, itemCount, changedCount, error = null) {
@@ -359,6 +392,11 @@ class PriceTracker {
     }
 
     startAutoCheck() {
+        cron.schedule('*/10 * * * *', () => {
+            this.retryPendingPriceChangeEmails()
+                .then(count => { if (count) console.log(`${count} bekleyen fiyat değişimi e-postası gönderildi.`); })
+                .catch(error => console.warn(`Bekleyen e-posta kuyruğu kontrol edilemedi: ${error.message}`));
+        });
         cron.schedule('0 * * * *', () => {
             this.runHourlyAnalyses().catch(error => console.warn(`Saatlik radar turu durdu: ${error.message}`));
         });
@@ -368,6 +406,7 @@ class PriceTracker {
         });
         // Sunucu tam saatten sonra yeniden başladıysa bir sonraki saati bekleme.
         setTimeout(() => this.runMissedHourlyAnalyses(), 12000);
+        setTimeout(() => this.retryPendingPriceChangeEmails().catch(error => console.warn(`Bekleyen e-posta kuyruğu başlatılamadı: ${error.message}`)), 5000);
         console.log('Düşük Fiyat, Fırsatlar, Çok Satanlar ve Yorum Radarı her saat sırayla yenilenir.');
     }
 }
