@@ -16,16 +16,41 @@ function resolveFrom(user) {
     return configured.includes('@') ? configured : `"${configured.replace(/"/g, '')}" <${user}>`;
 }
 
-function transportFor({ host, user, pass }) {
+function transportFor({ host, user, pass, port, secure }) {
     return nodemailer.createTransport({
         host,
-        port: Number(config.port || process.env.SMTP_PORT || 465),
-        secure: config.secure ?? (process.env.SMTP_SECURE !== 'false'),
+        port: Number(port ?? config.port ?? process.env.SMTP_PORT ?? 465),
+        secure: secure ?? config.secure ?? (process.env.SMTP_SECURE !== 'false'),
         auth: { user, pass },
         connectionTimeout: 20000,
         greetingTimeout: 20000,
         socketTimeout: 30000
     });
+}
+
+function smtpEndpoints() {
+    const configured = { port: Number(config.port || process.env.SMTP_PORT || 465), secure: config.secure ?? (process.env.SMTP_SECURE !== 'false') };
+    const endpoints = [configured];
+    // Bazı ağlar 465'i, bazıları 587'yi engeller. Gmail için iki standart
+    // teslim portunu sırayla dene; aynı ayarı iki kez deneme.
+    if ((config.host || process.env.SMTP_HOST) === 'smtp.gmail.com') {
+        endpoints.push({ port: 465, secure: true }, { port: 587, secure: false });
+    }
+    return endpoints.filter((endpoint, index, list) => list.findIndex(item => item.port === endpoint.port && item.secure === endpoint.secure) === index);
+}
+
+async function sendWithFallback(settings, message) {
+    const failures = [];
+    for (const endpoint of smtpEndpoints()) {
+        try {
+            await transportFor({ ...settings, ...endpoint }).sendMail(message);
+            console.log(`SMTP e-postası ${endpoint.port} portundan gönderildi.`);
+            return true;
+        } catch (error) {
+            failures.push(`${endpoint.port}: ${error.code || error.message}`);
+        }
+    }
+    throw new Error(`SMTP bağlantısı kurulamadı (${failures.join(' · ')})`);
 }
 
 function money(value) {
@@ -50,7 +75,7 @@ function changeDetail(change) {
 
 async function sendAlertEmail(alert, currentPrice, reasons) {
     const settings = smtpSettings();
-    await transportFor(settings).sendMail({
+    await sendWithFallback(settings, {
         from: resolveFrom(settings.user),
         to: config.recipient || alert.email,
         subject: `PİNTİ alarmı: ${alert.title}`,
@@ -72,7 +97,7 @@ async function sendPriceChangesEmail(sourceLabel, changes, recipient = 'faatihus
         const color = info.difference < 0 ? '#168342' : '#b12704';
         return `<tr><td style="padding:12px;border-bottom:1px solid #e5e7eb"><a href="${change.productUrl}" style="color:#007185;font-weight:700">${change.title}</a></td><td style="padding:12px;border-bottom:1px solid #e5e7eb;text-decoration:line-through;color:#6b7280">${money(info.previous)}</td><td style="padding:12px;border-bottom:1px solid #e5e7eb;font-weight:700">${money(info.current)}</td><td style="padding:12px;border-bottom:1px solid #e5e7eb;color:${color};font-weight:800">${money(info.amount)} (%${info.percentage.toFixed(2)}) ${info.direction}</td></tr>`;
     }).join('');
-    await transportFor(settings).sendMail({
+    await sendWithFallback(settings, {
         from: resolveFrom(settings.user),
         to: config.recipient || recipient,
         subject: `PİNTİ fiyat değişimi: ${sourceLabel} (${changes.length} ürün)`,
