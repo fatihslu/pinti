@@ -21,6 +21,7 @@ const priceChartContent = document.getElementById('priceChartContent');
 let categories = [], analysisCategories = [], currentItems = [], activePeriod = 30, activeView = 'low-prices', scanPollTimer, automationPollTimer;
 let bestSellerCategoryId = 'featured', reviewRadarCategoryId = 'featured';
 let analysisRuns = {};
+let lastPriceChangesLoadedAt = 0;
 
 const escapeHtml = value => String(value ?? '').replace(/[&<>'"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[char]);
 const price = value => value != null && Number.isFinite(Number(value))
@@ -407,6 +408,16 @@ async function loadPriceChanges() {
         const heading = when ? `${when.toLocaleDateString('tr-TR')} · ${when.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' })} taraması` : 'Tarih bilinmiyor';
         return `<section class="change-batch"><header><div><strong>${heading}</strong><span>${escapeHtml(sourceLabels[group.source] || group.source)}</span></div><b>${group.events.length} fiyat değişimi</b></header><div class="change-list">${group.events.map(event => `<article class="change-row"><div><a href="${escapeHtml(event.product_url || '#')}" target="_blank" rel="noopener">${escapeHtml(event.title)}</a><span>${escapeHtml(sourceLabels[event.source] || event.source)}</span></div><div class="change-prices"><del>${price(event.previous_price)}</del><strong>${price(event.current_price)}</strong></div></article>`).join('')}</div></section>`;
     }).join('') : '<div class="empty-state">Henüz kaydedilmiş fiyat değişimi yok. İlk değişimden itibaren her tarama burada gruplanır.</div>'}</article>`;
+    document.querySelectorAll('.change-row').forEach((row, index) => {
+        const event = events[index];
+        const difference = Number(event.current_price) - Number(event.previous_price);
+        const percentage = Number(event.previous_price) > 0 ? Math.abs(difference / Number(event.previous_price) * 100) : 0;
+        const change = document.createElement('span');
+        change.className = `change-delta ${difference < 0 ? 'down' : 'up'}`;
+        change.textContent = `${difference < 0 ? '↓' : '↑'} ${price(Math.abs(difference))} · %${percentage.toFixed(2)} ${difference < 0 ? 'düştü' : 'arttı'}`;
+        row.querySelector('.change-prices')?.append(change);
+    });
+    lastPriceChangesLoadedAt = Date.now();
     scanStatus.textContent = events.length ? `${events.length} fiyat değişimi, ${groups.length} tarama altında listeleniyor.` : 'Henüz fiyat değişimi kaydı yok.';
     lastUpdateStatus.textContent = 'Fiyat değişimleri her tarama tamamlandığında kaydedilir.';
 }
@@ -483,6 +494,7 @@ async function refreshActiveDashboard() {
     dashboardRefreshInFlight = true;
     try {
         if (activeView === 'price-changes') {
+            if (Date.now() - lastPriceChangesLoadedAt < 30 * 60 * 1000) return;
             await loadPriceChanges();
             return;
         }
