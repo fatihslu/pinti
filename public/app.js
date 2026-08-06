@@ -225,9 +225,25 @@ function filterItems() {
         .sort(order);
 }
 
+function updatePeriodTabs() {
+    document.querySelectorAll('.period-tab').forEach(button => {
+        const period = Number(button.dataset.period);
+        const count = currentItems.filter(item => Number(item.low_price_period) === period).length;
+        button.textContent = `${period} gün (${count})`;
+        button.title = `${period} günün en düşük fiyat etiketiyle bulunan ${count} ürün`;
+    });
+}
+
 function renderLowPrices() {
     const items = filterItems();
+    const periodTotal = currentItems.filter(item => Number(item.low_price_period) === activePeriod).length;
     summary.innerHTML = `<article class="summary-card full-width"><h2>${items.length} ürün · Birleşik filtre sonucu</h2>${items.length ? `<div class="product-list">${items.map(item => card(item)).join('')}</div>` : '<div class="empty-state">Bu filtre kombinasyonunda ürün bulunamadı.</div>'}</article>`;
+    const heading = summary.querySelector('h2');
+    if (heading) heading.textContent = `${activePeriod} gün · ${items.length}/${periodTotal} ürün · Birleşik filtre sonucu`;
+    if (!items.length && !periodTotal) {
+        const empty = summary.querySelector('.empty-state');
+        if (empty) empty.textContent = `Amazon bu kategoride ${activePeriod} gün etiketiyle ürün döndürmedi. Bu dönem için kayıt yok.`;
+    }
     summary.querySelector('h2')?.insertAdjacentHTML('afterend', lastRunMarkup('low-prices'));
     wireAlertButtons();
 }
@@ -241,6 +257,7 @@ async function loadSnapshot() {
     const items = await response.json();
     if (!response.ok) throw new Error(items.error || 'Kayıt alınamadı');
     currentItems = items;
+    updatePeriodTabs();
     scanStatus.textContent = items.length ? `${categorySelect.selectedOptions[0].text}: ${items.length} ürün hazır.` : 'Bu kategori henüz taranmadı.';
     renderLowPrices();
 }
