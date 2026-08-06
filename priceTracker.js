@@ -392,11 +392,6 @@ class PriceTracker {
     }
 
     startAutoCheck() {
-        cron.schedule('*/10 * * * *', () => {
-            this.retryPendingPriceChangeEmails()
-                .then(count => { if (count) console.log(`${count} bekleyen fiyat değişimi e-postası gönderildi.`); })
-                .catch(error => console.warn(`Bekleyen e-posta kuyruğu kontrol edilemedi: ${error.message}`));
-        });
         cron.schedule('0 * * * *', () => {
             this.runHourlyAnalyses().catch(error => console.warn(`Saatlik radar turu durdu: ${error.message}`));
         });
@@ -406,8 +401,7 @@ class PriceTracker {
         });
         // Sunucu tam saatten sonra yeniden başladıysa bir sonraki saati bekleme.
         setTimeout(() => this.runMissedHourlyAnalyses(), 12000);
-        setTimeout(() => this.retryPendingPriceChangeEmails().catch(error => console.warn(`Bekleyen e-posta kuyruğu başlatılamadı: ${error.message}`)), 5000);
-        console.log('Düşük Fiyat, Fırsatlar, Çok Satanlar ve Yorum Radarı her saat sırayla yenilenir.');
+        console.log('Düşük Fiyat, Fırsatlar, Çok Satanlar ve Yorum Radarı her saat sırayla yenilenir. E-posta teslimi kapalıdır.');
     }
 }
 

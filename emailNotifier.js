@@ -1,6 +1,9 @@
 let nodemailer = null;
 try { nodemailer = require('nodemailer'); } catch (_) { /* Optional until SMTP is configured. */ }
 const config = require('./email.config');
+// Kullanıcı isteğiyle e-posta teslimi kapalı. Yeniden açmak istenirse uygulama
+// başlatılırken PINTI_EMAIL_ENABLED=true ortam değişkeni verilebilir.
+const EMAIL_DELIVERY_ENABLED = process.env.PINTI_EMAIL_ENABLED === 'true';
 
 function smtpSettings() {
     const host = config.host || process.env.SMTP_HOST;
@@ -74,6 +77,7 @@ function changeDetail(change) {
 }
 
 async function sendAlertEmail(alert, currentPrice, reasons) {
+    if (!EMAIL_DELIVERY_ENABLED) return false;
     const settings = smtpSettings();
     await sendWithFallback(settings, {
         from: resolveFrom(settings.user),
@@ -87,6 +91,7 @@ async function sendAlertEmail(alert, currentPrice, reasons) {
 
 async function sendPriceChangesEmail(sourceLabel, changes, recipient = 'faatihuslu@gmail.com') {
     if (!changes.length) return false;
+    if (!EMAIL_DELIVERY_ENABLED) return false;
     const settings = smtpSettings();
     const textRows = changes.map((change, index) => {
         const info = changeDetail(change);
